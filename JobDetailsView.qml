@@ -10,6 +10,7 @@ ScrollView {
     property var jobData: jobModel.getJob(jobIndex)
     property string imagePath: jobData.imagePath
     property var imageMeta: ({})
+    property var appState
 
     anchors.fill: parent
     ScrollBar.vertical.interactive: true
@@ -20,6 +21,41 @@ ScrollView {
 
         if (jobData.imagePath !== "") {
             updateMetadata(jobData.imagePath)
+        }
+
+        if (appState.selectedPrinter.length > 0) {
+                    safeSelectFirstSupported(profileBox, printJobOutput.supportedColorModes())
+                    safeSelectFirstSupported(paperSizeBox, printJobOutput.supportedMediaSizes())
+                    // TODO: Add more fields as neccessary
+                }
+    }
+
+    onVisibleChanged: {
+        if (visible) {
+            refreshPreview()
+        }
+    }
+
+    function refreshPreview() {
+        const temp = previewImage.source
+        previewImage.source = ""
+        previewImage.source = temp
+    }
+
+    function isSupported(value, supportedList) {
+        if (!supportedList || supportedList.length === 0)
+            return true
+        return supportedList.indexOf(value) !== -1
+    }
+
+    function safeSelectFirstSupported(comboBox, supportedList) {
+        if (!supportedList || supportedList.length === 0)
+            return
+        for (let i = 0; i < comboBox.count; i++) {
+            if (supportedList.indexOf(comboBox.model[i]) !== -1) {
+                comboBox.currentIndex = i
+                break
+            }
         }
     }
 
@@ -51,6 +87,14 @@ ScrollView {
 
     function updateResolution() {
         jobData.resolution = Qt.size(resolutionWidthSpin.value, resolutionHeightSpin.value)
+    }
+
+    function updateResolutionFromMetadata() {
+        if (imageMeta.width !== undefined && imageMeta.height !== undefined) {
+            resolutionWidthSpin.value = imageMeta.width
+            resolutionHeightSpin.value = imageMeta.height
+            updateResolution()
+        }
     }
 
     function updateOffset() {
@@ -115,7 +159,11 @@ ScrollView {
                         height: parent.height
                         smooth: true
                         visible: source !== ""
+                        cache: false
                         clip: true
+
+                        opacity: visible ? 1.0 : 0.0
+                        Behavior on opacity { NumberAnimation { duration: 200 } }
                     }
 
                     Text {
@@ -157,6 +205,10 @@ ScrollView {
                                 updateMetadata(file)
                                 updateImagePath(file)
                                 imagePath = file
+
+                                if (imageMeta.width > 0 && imageMeta.height > 0) {
+                                    updateResolutionFromMetadata()
+                                }
                             }
                             else {
                                 console.warn("File validation failed.")
@@ -176,7 +228,6 @@ ScrollView {
                 }
 
                 GroupBox {
-                    title: ""
                     Layout.fillWidth: true
 
                     ColumnLayout {
@@ -191,6 +242,8 @@ ScrollView {
                             model: ["A4", "Letter", "Tabloid", "Custom"]
                             currentIndex: paperSizeIndexFromSize(jobData.paperSize)
                             onCurrentTextChanged: updatePaperSize()
+
+                            enabled: appState.selectedPrinter.length === 0 || isSupported(currentText, printJobOutput.supportedMediaSizes())
 
                             ToolTip.text: "Select a predefined paper size or choose Custom to define your own dimensions"
                             ToolTip.visible: hovered
@@ -213,8 +266,6 @@ ScrollView {
                                     editable: true
                                     Layout.fillWidth: true
                                     onValueChanged: jobData.paperSize.width = value
-                                    ToolTip.text: "Custom paper width in millimeters"
-                                    ToolTip.visible: hovered
                                 }
 
                                 Label { text: "×" }
@@ -226,8 +277,6 @@ ScrollView {
                                     editable: true
                                     Layout.fillWidth: true
                                     onValueChanged: jobData.paperSize.height = value
-                                    ToolTip.text: "Custom paper height in millimeters"
-                                    ToolTip.visible: hovered
                                 }
                             }
                         }
@@ -325,6 +374,9 @@ ScrollView {
                             model: ["sRGB", "AdobeRGB", "CMYK", "Gray", "Custom ICC"]
                             currentIndex: model.indexOf(jobData.colorProfile)
                             onCurrentTextChanged: updateColorProfile()
+
+                            enabled: appState.selectedPrinter.length === 0 || isSupported(currentText, printJobOutput.supportedColorModes())
+
                             ToolTip.text: "Set the ICC or color profile used for rendering"
                             ToolTip.visible: hovered
                         }

@@ -1,14 +1,9 @@
 Fix SVG anf PDF Validation
 Fix Save and PRN Output to one single file at time
 CLean up code and add comments
-Make the property ImageMeta the variable used instead of meta in JobsDetailsView
 Fix image preview to remove the edges of the rectangle if the image is smaller than the bounding area
 Fix Select All feature in Job List
-Create Imposition View
-Fix ImageEditorView centering issue
-Fix Printer Detect Refresh Button
 Fix Save and Load Job functions
 Fix PRN Output
 Automate the resolution field in Job Details to update when an image is loaded
-Automate Image Preview Update after editing the image
-Add an Imposition Page
+Add an Imposition VIew
