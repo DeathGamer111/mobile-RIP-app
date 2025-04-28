@@ -2,12 +2,19 @@ cmake_minimum_required(VERSION 3.16)
 
 project(RIPPrinterApp VERSION 0.1 LANGUAGES CXX)
 
+
+# QT Setup
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
 find_package(Qt6 REQUIRED COMPONENTS Quick)
-
 qt_standard_project_setup(REQUIRES 6.8)
 
+
+# ImageMagick Setup
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ImageMagick REQUIRED IMPORTED_TARGET Magick++)
+
+
+# Executable sources
 qt_add_executable(appRIPPrinterApp
     main.cpp
     PrintJobModel.cpp
@@ -18,8 +25,13 @@ qt_add_executable(appRIPPrinterApp
     PrintJobOutput.h PrintJobOutput.cpp
     ToDoList
     Toast.qml
+    ImageEditor.h ImageEditor.cpp
+    ImageEditorView.qml
+    PrinterSetupView.qml
 )
 
+
+# Target C++ sources
 target_sources(appRIPPrinterApp PRIVATE
     PrintJobModel.h
     PrintJob.h
@@ -27,13 +39,18 @@ target_sources(appRIPPrinterApp PRIVATE
     PrintJobOutput.h
 )
 
+
+# QML Resources
 qt_add_resources(appRIPPrinterApp "qml"
     FILES
         Main.qml
         JobListView.qml
         JobDetailsView.qml
+        ImageEditorView.qml
+        PrinterSetupView.qml
         Toast.qml
 )
+
 
 # Platform-specific CUPS linking
 if(UNIX AND NOT APPLE)  # Linux, Android
@@ -49,6 +66,7 @@ if(UNIX AND NOT APPLE)  # Linux, Android
     endif()
 endif()
 
+
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
 # If you are developing for iOS or macOS you should consider setting an
 # explicit, fixed bundle identifier manually though.
@@ -60,10 +78,13 @@ set_target_properties(appRIPPrinterApp PROPERTIES
     WIN32_EXECUTABLE TRUE
 )
 
+
 target_link_libraries(appRIPPrinterApp
     PRIVATE Qt6::Quick
     PRIVATE cups
+    PRIVATE PkgConfig::ImageMagick
 )
+
 
 include(GNUInstallDirs)
 install(TARGETS appRIPPrinterApp

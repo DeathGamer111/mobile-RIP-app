@@ -162,5 +162,3 @@ QVariantMap ImageLoader::inspectSvgOrPdf(const QString &path) {
 
     return meta;
 }
-
-

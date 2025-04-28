@@ -4,6 +4,7 @@
 #include "PrintJobModel.h"
 #include "ImageLoader.h"
 #include "PrintJobOutput.h"
+#include "ImageEditor.h"
 
 int main(int argc, char *argv[]) {
 
@@ -12,10 +13,12 @@ int main(int argc, char *argv[]) {
 
     PrintJobModel jobModel;
     ImageLoader imageLoader;
+    ImageEditor imageEditor;
     PrintJobOutput printJobOutput;
 
     engine.rootContext()->setContextProperty("jobModel", &jobModel);
     engine.rootContext()->setContextProperty("imageLoader", &imageLoader);
+    engine.rootContext()->setContextProperty("imageEditor", &imageEditor);
     engine.rootContext()->setContextProperty("printJobOutput", &printJobOutput);
 
     engine.load(QUrl(QStringLiteral("qrc:/Main.qml")));

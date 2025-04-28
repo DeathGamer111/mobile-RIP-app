@@ -138,9 +138,12 @@ ScrollView {
 
                     Button {
                         text: "Edit Image"
-                        onClicked: console.log("TODO: Open image editor")
                         ToolTip.text: "Open image editor to make adjustments before printing"
                         ToolTip.visible: hovered
+                        enabled: imagePath !== ""
+                        onClicked: {
+                            stackView.push("qrc:/ImageEditorView.qml", { "imagePath": imagePath })
+                        }
                     }
                 }
 

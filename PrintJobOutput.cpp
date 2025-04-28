@@ -8,10 +8,20 @@
 #include <QFile>
 #include <QStringList>
 #include <QMimeDatabase>
+#include <QUrl>
+#include <QSet>
 
 
-PrintJobOutput::PrintJobOutput(QObject *parent) : QObject(parent) {}
+PrintJobOutput::PrintJobOutput(QObject *parent) : QObject(parent) { refreshDetectedPrinters(); }
 
+PrintJobOutput::~PrintJobOutput() {
+    if (printerInfo) {
+        cupsFreeDestInfo(printerInfo);
+    }
+    if (ppd) {
+        ppdClose(ppd);
+    }
+}
 
 bool PrintJobOutput::loadPrinter(const QString &printerName) {
     this->printerName = printerName;
@@ -27,7 +37,44 @@ bool PrintJobOutput::loadPrinter(const QString &printerName) {
         return false;
     }
 
+    if (printerInfo) {
+        cupsFreeDestInfo(printerInfo);
+    }
+
+    printerInfo = cupsCopyDestInfo(CUPS_HTTP_DEFAULT, dest);
+
     cupsFreeDests(num_dests, dests);
+
+    if (!printerInfo) {
+        qWarning() << "Failed to get detailed printer info for:" << printerName;
+        return false;
+    }
+
+    return true;
+}
+
+
+bool PrintJobOutput::loadPPDFile(const QString &ppdPath) {
+
+    QString localInputPath = QUrl(ppdPath).toLocalFile();
+
+    ppd_file_t *ppd = ppdOpenFile(localInputPath.toUtf8().constData());
+    if (!ppd) {
+        qWarning() << "Failed to load PPD file:" << ppdPath;
+        return false;
+    }
+
+    ppdMarkDefaults(ppd);
+    cups_option_t *options = nullptr;
+    int num_options = 0;
+
+    // Optionally store this ppd in a member variable if you plan to use it later
+    if (this->ppd) {
+        ppdClose(this->ppd);
+    }
+    this->ppd = ppd;
+
+    qDebug() << "PPD file loaded successfully.";
     return true;
 }
 
@@ -50,6 +97,8 @@ bool PrintJobOutput::registerPrinterFromPPD(const QString &printerName, const QS
 
     QString uri = "ipp://localhost/printers/" + printerName;
 
+    QString filename = printerName + ".ppd";
+
     // Set printer URI
     ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_URI, "printer-uri", nullptr, uri.toUtf8().constData());
 
@@ -60,7 +109,7 @@ bool PrintJobOutput::registerPrinterFromPPD(const QString &printerName, const QS
     ippAddString(request, IPP_TAG_PRINTER, IPP_TAG_URI, "device-uri", nullptr, "file:/dev/null");
 
     // Set PPD file path (important!)
-    ippAddString(request, IPP_TAG_PRINTER, IPP_TAG_NAME, "ppd-name", nullptr, ppdPath.toUtf8().constData());
+    ippAddString(request, IPP_TAG_PRINTER, IPP_TAG_NAME, "ppd-name", nullptr, filename.toUtf8().constData());
 
     // Send the request
     ipp_t *response = cupsDoRequest(http, request, "/admin/");
@@ -80,25 +129,34 @@ bool PrintJobOutput::registerPrinterFromPPD(const QString &printerName, const QS
 }
 
 
-bool PrintJobOutput::loadPPDFile(const QString &ppdPath) {
-    ppd_file_t *ppd = ppdOpenFile(ppdPath.toUtf8().constData());
-    if (!ppd) {
-        qWarning() << "Failed to load PPD file:" << ppdPath;
-        return false;
+QStringList PrintJobOutput::detectedPrinters() const {
+    return m_detectedPrinters;
+}
+
+
+void PrintJobOutput::refreshDetectedPrinters() {
+    QStringList printerList;
+
+    int num_dests = 0;
+    cups_dest_t* dests = nullptr;
+
+    num_dests = cupsGetDests(&dests);
+    if (num_dests > 0 && dests) {
+        for (int i = 0; i < num_dests; ++i) {
+            const char* name = dests[i].name;
+            if (name) {
+                printerList.append(QString::fromUtf8(name));
+            }
+        }
     }
 
-    ppdMarkDefaults(ppd);
-    cups_option_t *options = nullptr;
-    int num_options = 0;
+    cupsFreeDests(num_dests, dests);
 
-    // Optionally store this ppd in a member variable if you plan to use it later
-    if (this->ppd) {
-        ppdClose(this->ppd);
+    // Only update if changed
+    if (m_detectedPrinters != printerList) {
+        m_detectedPrinters = printerList;
+        emit detectedPrintersChanged();
     }
-    this->ppd = ppd;
-
-    qDebug() << "PPD file loaded successfully.";
-    return true;
 }
 
 
@@ -136,68 +194,115 @@ void PrintJobOutput::markPpdOptionsFromJob(const PrintJob &job) {
 
 
 QStringList PrintJobOutput::supportedResolutions() const {
-    return getOptionValues("Resolution");
+    return getSupportedValues("Resolution");
 }
 
 
 QStringList PrintJobOutput::supportedMediaSizes() const {
-    return getOptionValues("media");
+    return getSupportedValues("media");
 }
 
 
 QStringList PrintJobOutput::supportedDuplexModes() const {
-    return getOptionValues("Duplex");
+    return getSupportedValues("Duplex");
 }
 
 
 QStringList PrintJobOutput::supportedColorModes() const {
-    return getOptionValues("PrintColorMode");
+    return getSupportedValues("PrintColorMode");
 }
 
 
-QStringList PrintJobOutput::getOptionValues(const QString &optionName) const {
+bool PrintJobOutput::isOptionSupported(const QString &option) const {
+    if (!printerInfo || printerName.isEmpty()) return false;
+
+    int num_dests;
+    cups_dest_t *dests, *dest;
+    num_dests = cupsGetDests(&dests);
+    dest = cupsGetDest(printerName.toUtf8().constData(), nullptr, num_dests, dests);
+
+    if (!dest) {
+        cupsFreeDests(num_dests, dests);
+        return false;
+    }
+
+    bool supported = cupsCheckDestSupported(CUPS_HTTP_DEFAULT, dest, printerInfo, option.toUtf8().constData(), nullptr);
+
+    cupsFreeDests(num_dests, dests);
+    return supported;
+}
+
+bool PrintJobOutput::isOptionValueSupported(const QString &option, const QString &value) const {
+    if (!printerInfo || printerName.isEmpty()) return false;
+
+    int num_dests;
+    cups_dest_t *dests, *dest;
+    num_dests = cupsGetDests(&dests);
+    dest = cupsGetDest(printerName.toUtf8().constData(), nullptr, num_dests, dests);
+
+    if (!dest) {
+        cupsFreeDests(num_dests, dests);
+        return false;
+    }
+
+    bool supported = cupsCheckDestSupported(CUPS_HTTP_DEFAULT, dest, printerInfo,
+                                            option.toUtf8().constData(),
+                                            value.toUtf8().constData());
+
+    cupsFreeDests(num_dests, dests);
+    return supported;
+}
+
+QString PrintJobOutput::getDefaultOptionValue(const QString &option) const {
+    if (!printerInfo || printerName.isEmpty()) return QString();
+
+    int num_dests;
+    cups_dest_t *dests, *dest;
+    num_dests = cupsGetDests(&dests);
+    dest = cupsGetDest(printerName.toUtf8().constData(), nullptr, num_dests, dests);
+
+    if (!dest) {
+        cupsFreeDests(num_dests, dests);
+        return QString();
+    }
+
+    ipp_attribute_t *attr = cupsFindDestDefault(CUPS_HTTP_DEFAULT, dest, printerInfo, option.toUtf8().constData());
+
+    QString def;
+    if (attr && ippGetCount(attr) > 0) {
+        def = QString::fromUtf8(ippGetString(attr, 0, nullptr));
+    }
+
+    cupsFreeDests(num_dests, dests);
+    return def;
+}
+
+QStringList PrintJobOutput::getSupportedValues(const QString &option) const {
     QStringList values;
 
-    if (printerName.isEmpty()) {
-        qWarning() << "Printer name not loaded.";
-        return values;
-    }
+    if (!printerInfo || printerName.isEmpty()) return values;
 
-    cups_dest_t *dest = cupsGetNamedDest(CUPS_HTTP_DEFAULT, printerName.toUtf8().constData(), nullptr);
+    int num_dests;
+    cups_dest_t *dests, *dest;
+    num_dests = cupsGetDests(&dests);
+    dest = cupsGetDest(printerName.toUtf8().constData(), nullptr, num_dests, dests);
+
     if (!dest) {
-        qWarning() << "Failed to get named destination for printer:" << printerName;
+        cupsFreeDests(num_dests, dests);
         return values;
     }
 
-    http_t *http = httpConnect2("localhost", ippPort(), nullptr, AF_UNSPEC,
-                                HTTP_ENCRYPT_IF_REQUESTED, 1, 3000, nullptr);
-    if (!http) {
-        qWarning() << "HTTP connection to CUPS server failed.";
-        cupsFreeDests(1, dest);
-        return values;
-    }
+    ipp_attribute_t *attr = cupsFindDestSupported(CUPS_HTTP_DEFAULT, dest, printerInfo, option.toUtf8().constData());
 
-    cups_dinfo_t *info = cupsCopyDestInfo(http, dest);
-    if (!info) {
-        qWarning() << "Failed to retrieve destination info.";
-        httpClose(http);
-        cupsFreeDests(1, dest);
-        return values;
-    }
-
-    // Scan through options and collect any matching key names
-    for (int i = 0; i < dest->num_options; ++i) {
-        const char *name = dest->options[i].name;
-        const char *val  = dest->options[i].value;
-        if (QString::fromUtf8(name).compare(optionName, Qt::CaseInsensitive) == 0) {
-            values.append(QString::fromUtf8(val));
+    if (attr) {
+        int count = ippGetCount(attr);
+        for (int i = 0; i < count; ++i) {
+            const char *val = ippGetString(attr, i, nullptr);
+            if (val) values.append(QString::fromUtf8(val));
         }
     }
 
-    cupsFreeDestInfo(info);
-    cupsFreeDests(1, dest);
-    httpClose(http);
-
+    cupsFreeDests(num_dests, dests);
     return values;
 }
 
@@ -227,6 +332,7 @@ bool PrintJobOutput::generatePRN(const QVariantMap &jobMap, const QString &input
     job.whiteStrategy = jobMap["whiteStrategy"].toString();
     job.varnishType = jobMap["varnishType"].toString();
     job.colorProfile = jobMap["colorProfile"].toString();
+
     // Add other fields as needed
 
     return generatePRN(job, inputFile, outputPath);
@@ -239,14 +345,14 @@ bool PrintJobOutput::generatePRN(const PrintJob &job, const QString &inputFile, 
         return false;
     }
 
-    QFile file(QUrl(inputFile).toLocalFile());
+    QString localPath = QUrl(inputFile).toLocalFile();
+    QFile file(localPath);
     if (!file.open(QIODevice::ReadOnly)) {
         qWarning() << "Failed to open input file:" << inputFile;
         return false;
     }
 
-    const char *format = inferCupsMimeType(inputFile);
-
+    const char *format = inferCupsMimeType(localPath);
     QByteArray fileData = file.readAll();
     file.close();
 
@@ -267,8 +373,10 @@ bool PrintJobOutput::generatePRN(const PrintJob &job, const QString &inputFile, 
     cups_option_t *options = nullptr;
     int num_options = 0;
 
-    // Set output file destination using IPP attribute
-    num_options = cupsAddOption("outputfile", outputPath.toUtf8().constData(), num_options, &options);
+    // Only add outputfile option if printing to a simulated printer
+    if (!outputPath.isEmpty()) {
+        num_options = cupsAddOption("outputfile", outputPath.toUtf8().constData(), num_options, &options);
+    }
 
     // Create the print job
     int job_id = cupsCreateJob(http, dest->name, job.name.toUtf8().constData(), num_options, options);
@@ -281,7 +389,7 @@ bool PrintJobOutput::generatePRN(const PrintJob &job, const QString &inputFile, 
     }
 
     // Start the document
-    if (!cupsStartDocument(http, dest->name, job_id, inputFile.toUtf8().constData(), format, 1)) {
+    if (!cupsStartDocument(http, dest->name, job_id, localPath.toUtf8().constData(), format, 1)) {
         qWarning() << "Failed to start CUPS document:" << cupsLastErrorString();
         cupsFreeOptions(num_options, options);
         cupsFreeDests(1, dest);
@@ -299,18 +407,65 @@ bool PrintJobOutput::generatePRN(const PrintJob &job, const QString &inputFile, 
     }
 
     // Finish document
+    ipp_status_t status = cupsLastError();
     if (!cupsFinishDocument(http, dest->name)) {
-        qWarning() << "Failed to finish document:" << cupsLastErrorString();
-        cupsFreeOptions(num_options, options);
-        cupsFreeDests(1, dest);
-        httpClose(http);
-        return false;
+        if (status < IPP_OK || status >= IPP_REDIRECTION_OTHER_SITE) {
+            qWarning() << "Failed to finish document:" << cupsLastErrorString();
+            cupsFreeOptions(num_options, options);
+            cupsFreeDests(1, dest);
+            httpClose(http);
+            return false;
+        } else {
+            qDebug() << "cupsFinishDocument returned false, but IPP status is OK:" << cupsLastErrorString();
+        }
     }
 
-    // Clean up
     cupsFreeOptions(num_options, options);
     cupsFreeDests(1, dest);
     httpClose(http);
 
+    // Optional check for PRN existence
+    if (!outputPath.isEmpty() && !QFile::exists(outputPath)) {
+        qWarning() << "Expected PRN file not found at:" << outputPath;
+        return false;
+    }
+
     return true;
+}
+
+
+bool PrintJobOutput::generatePRNviaFilter(const QVariantMap &jobMap, const QString &inputFile, const QString &outputPath) {
+    PrintJob job;
+    job.name = jobMap["name"].toString();
+    job.imagePath = jobMap["imagePath"].toString();
+    job.paperSize = jobMap["paperSize"].toSize();
+    job.resolution = jobMap["resolution"].toSize();
+    job.offset = jobMap["offset"].toPoint();
+    job.whiteStrategy = jobMap["whiteStrategy"].toString();
+    job.varnishType = jobMap["varnishType"].toString();
+    job.colorProfile = jobMap["colorProfile"].toString();
+    QString ppdPath = "/home/mccalla/Downloads/Epson_SC_T5000.ppd";
+    return generatePRNviaFilter(job, ppdPath, inputFile, outputPath);
+}
+
+
+bool PrintJobOutput::generatePRNviaFilter(const PrintJob &job, const QString ppdPath, const QString &inputFile, const QString &outputPath) {
+
+    QString localOutputPath = QUrl(outputPath).toLocalFile();
+    QString localInputPath = QUrl(inputFile).toLocalFile();
+
+    QString command = QString("cupsfilter -P \"%1\" -m application/vnd.cups-raster \"%2\" > \"%3\"")
+                          .arg(ppdPath)
+                          .arg(localInputPath)
+                          .arg(localOutputPath);
+
+    qDebug() << "Executing:" << command;
+
+    int result = system(command.toUtf8().constData());
+    if (result != 0) {
+        qWarning() << "cupsfilter failed with code:" << result;
+        return false;
+    }
+
+    return QFile::exists(outputPath);
 }

@@ -3,8 +3,13 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
 import Qt.labs.platform
+import QtCore
 
 Item {
+    id: root
+    required property StackView stackView
+    required property var appState
+
     signal openJobDetails(int jobIndex)
 
     property bool selectionMode: false
@@ -20,85 +25,125 @@ Item {
         } else {
             selectedIndexes.push(index)
         }
-        selectedIndexes = selectedIndexes.slice() // trigger UI update
+        selectedIndexes = selectedIndexes.slice()
     }
 
     function isSelected(index) {
         return selectedIndexes.indexOf(index) !== -1
     }
 
+    function selectAll() {
+        let all = []
+        for (let i = 0; i < jobModel.count; ++i) {
+            all.push(i)
+        }
+        selectedIndexes = all
+    }
+
+    function deselectAll() {
+        selectedIndexes = []
+    }
+
+    function printSelectedJobDirectly() {
+        const index = selectedIndexes[0]
+        const job = jobModel.getJob(index)
+        const inputFile = job.imagePath
+
+        const outputPath = "" // Empty because printing directly to printer
+
+        const success = printJobOutput.generatePRN(job, inputFile, outputPath)
+        if (success) {
+            console.log("Print job sent to printer:", appState.selectedPrinter)
+            toast.show("Print job sent successfully.")
+        } else {
+            console.warn("Failed to print job:", job.name)
+            toast.show("Failed to print job.")
+        }
+    }
+
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 20
-        spacing: 20
-        width: Math.min(parent.width, 500)
-        anchors.horizontalCenter: parent.horizontalCenter
+        spacing: 12
 
-        // Selection Controls
-        ColumnLayout {
-            spacing: 8
+        // Top toolbar
+        RowLayout {
             Layout.alignment: Qt.AlignHCenter
+            spacing: 10
 
-            RowLayout {
-                spacing: 8
-                Layout.alignment: Qt.AlignHCenter
+            Button {
+                text: selectionMode ? "Cancel Selection" : "Select Jobs"
+                onClicked: {
+                    selectionMode = !selectionMode
+                    if (!selectionMode) selectedIndexes = []
+                }
+            }
 
-                Button {
-                    text: selectionMode ? "Cancel Selection" : "Select Jobs"
-                    onClicked: {
-                        selectionMode = !selectionMode
-                        if (!selectionMode) selectedIndexes = []
+            Button {
+                visible: selectionMode
+                text: selectedIndexes.length === jobModel.count ? "Deselect All" : "Select All"
+                onClicked: {
+                    if (selectedIndexes.length === jobModel.count) {
+                        deselectAll()
+                    } else {
+                        selectAll()
                     }
                 }
+            }
 
-                Button {
-                    text: "Remove Jobs"
-                    visible: selectionMode
-                    enabled: selectedIndexes.length > 0
-                    onClicked: {
-                        for (let i = selectedIndexes.length - 1; i >= 0; i--) {
-                            jobModel.removeJob(selectedIndexes[i])
-                        }
-                        selectedIndexes = []
+            Button {
+                text: "Remove Jobs"
+                visible: selectionMode
+                enabled: selectedIndexes.length > 0
+                onClicked: {
+                    for (let i = selectedIndexes.length - 1; i >= 0; i--) {
+                        jobModel.removeJob(selectedIndexes[i])
                     }
+                    selectedIndexes = []
                 }
+            }
 
-                Button {
-                    text: "Save Jobs"
-                    visible: selectionMode
-                    enabled: selectedIndexes.length > 0
-                    onClicked: {
-                        let jobName = jobModel.getJob(selectedIndexes[0]).name || "UntitledJob"
-                        jobName = jobName.replace(/[^a-zA-Z0-9_-]/g, "_") // safe filename
-                        suggestedFilename = jobName + ".json"
-                        saveFileDialog.open()
-                    }
+            Button {
+                text: "Save Jobs"
+                visible: selectionMode
+                enabled: selectedIndexes.length > 0
+                onClicked: {
+                    let jobName = jobModel.getJob(selectedIndexes[0]).name || "UntitledJob"
+                    jobName = jobName.replace(/[^a-zA-Z0-9_-]/g, "_")
+                    suggestedFilename = jobName + ".json"
+                    saveFileDialog.open()
                 }
             }
         }
 
-        // Scrollable job list
-        ScrollView {
+        Label {
+            visible: selectionMode
+            text: selectedIndexes.length + " job(s) selected"
+            font.pixelSize: 14
+            color: "gray"
+            horizontalAlignment: Text.AlignHCenter
             Layout.alignment: Qt.AlignHCenter
-            Layout.preferredWidth: Math.min(parent.width, 450)
-            Layout.preferredHeight: 400
+        }
+
+        // Scrollable middle section (the job list)
+        ScrollView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.margins: 12
+            clip: true
             ScrollBar.vertical.policy: ScrollBar.AsNeeded
             ScrollBar.vertical.interactive: true
 
-            Component.onCompleted: {
-                contentItem.flickableDirection = Flickable.VerticalFlick
-            }
-
             ListView {
                 id: jobListView
-                width: parent.width
+                width: Math.min(parent.width, 500)
                 model: jobModel
                 spacing: 6
-                clip: true
+                anchors.horizontalCenter: parent.horizontalCenter
 
                 delegate: ItemDelegate {
-                    id: itemDelegate
-                    width: parent.width
+                    width: jobListView.width
                     highlighted: selectionMode && isSelected(index)
 
                     onClicked: {
@@ -114,7 +159,6 @@ Item {
                         spacing: 10
 
                         CheckBox {
-                            id: checkBox
                             visible: selectionMode
                             checked: isSelected(index)
                             onClicked: toggleSelection(index)
@@ -130,7 +174,63 @@ Item {
             }
         }
 
-        // File dialogs
+        // Bottom toolbar
+        RowLayout {
+            Layout.alignment: Qt.AlignHCenter
+            spacing: 10
+
+            Button {
+                text: "Add New Job"
+                onClicked: jobModel.addJob("New Print Job")
+            }
+
+            Button {
+                text: "Load Jobs"
+                onClicked: openFileDialog.open()
+            }
+
+            Button {
+                text: "Printer Setup"
+                ToolTip.text: "Configure a simulated or real printer"
+                ToolTip.visible: hovered
+                onClicked: {
+                    if (appState !== undefined) {
+                        stackView.push("qrc:/PrinterSetupView.qml", {
+                            stackView: stackView,
+                            appState: appState
+                        })
+                    } else {
+                        console.warn("appState is undefined!")
+                    }
+                }
+            }
+
+            /*
+            Button {
+                text: "Output PRN"
+                enabled: selectedIndexes.length > 0
+                onClicked: outputFileDialog.open()
+                ToolTip.text: "Generate PRN output file(s) for the selected job(s)."
+                ToolTip.visible: hovered
+            }
+            */
+
+            Button {
+                text: "Print Job"
+                enabled: selectedIndexes.length > 0
+                onClicked: {
+                    if (appState.usingSimulatedPrinter) {
+                        outputFileDialog.open()
+                    } else {
+                        printSelectedJobDirectly()
+                    }
+                }
+                ToolTip.text: "Generate PRN file or print directly to the selected printer."
+                ToolTip.visible: hovered
+            }
+        }
+
+        // File Dialogs
         FileDialog {
             id: openFileDialog
             title: "Load Jobs from JSON"
@@ -147,77 +247,22 @@ Item {
             onAccepted: jobModel.saveToJson(file)
         }
 
-        // Bottom row for core actions
-        RowLayout {
-            spacing: 10
-            Layout.alignment: Qt.AlignHCenter
+        FileDialog {
+            id: outputFileDialog
+            title: "Select PRN File Destination"
+            fileMode: FileDialog.SaveFile
+            nameFilters: ["PRN Files (*.prn)", "All Files (*)"]
 
-            Button {
-                text: "Add New Job"
-                onClicked: jobModel.addJob("New Print Job")
-            }
+            onAccepted: {
+                const outputPath = file
+                const index = selectedIndexes[0]
+                const job = jobModel.getJob(index)
+                const inputFile = job.imagePath
 
-            Button {
-                text: "Load Jobs"
-                onClicked: openFileDialog.open()
-            }
-
-            Button {
-                text: "Load PPD"
-                onClicked: ppdDialog.open()
-                ToolTip.text: "Select a PPD file to simulate printer for PRN output"
-                ToolTip.visible: hovered
-            }
-
-            FileDialog {
-                id: ppdDialog
-                title: "Select Printer PPD File"
-                nameFilters: ["PPD Files (*.ppd)"]
-                fileMode: FileDialog.OpenFile
-                onAccepted: {
-
-                    const PPDsuccess = printJobOutput.loadPPDFile(QUrl(file).toLocalFile())
-                    PPDsuccess
-                        ? console.log("Loaded PPD File:", file)
-                        : console.warn("Failed to Load PPD File:", file)
-
-                    const RegisterSuccess = printJobOutput.registerPrinterFromPPD("TestEpson", QUrl(file).toLocalFile());
-                    RegisterSuccess
-                        ? console.log("Registered PPD as printer:", file)
-                        : console.warn("Failed to Register PPD File as printer:", file)
-
-                    const RegisterPrinterSucces = printJobOutput.loadPrinter("TestEpson");
-                    RegisterPrinterSucces
-                        ? console.log("Loaded Printer from PPD File", file)
-                        : console.warn("Failed to Load Printer from PPD file:", file)
-                }
-            }
-
-            Button {
-                text: "Print Job"
-                enabled: selectedIndexes.length > 0
-                onClicked: outputFileDialog.open()
-                ToolTip.text: "Generate PRN output file(s) for the selected job(s)."
-                ToolTip.visible: hovered
-            }
-
-            FileDialog {
-                id: outputFileDialog
-                title: "Select PRN File Destination"
-                fileMode: FileDialog.SaveFile
-                nameFilters: ["PRN Files (*.prn)", "All Files (*)"]
-
-                onAccepted: {
-                    const outputPath = file
-                    const index = selectedIndexes[0]
-                    const job = jobModel.getJob(index)
-                    const inputFile = job.imagePath
-
-                    const PRNsuccess = printJobOutput.generatePRN(job, inputFile, outputPath)
-                    PRNsuccess
-                        ? console.log("PRN generated at:", outputPath)
-                        : console.warn("Failed to generate PRN for:", job.name)
-                }
+                const PRNsuccess = printJobOutput.generatePRNviaFilter(job, inputFile, outputPath)
+                PRNsuccess
+                    ? console.log("PRN generated at:", outputPath)
+                    : console.warn("Failed to generate PRN for:", job.name)
             }
         }
     }
