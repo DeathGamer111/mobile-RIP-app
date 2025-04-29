@@ -29,8 +29,7 @@ public:
     Q_INVOKABLE QVariantMap getJob(int index) const;
     Q_INVOKABLE void updateJob(int index, const QVariantMap &jobData);
     Q_INVOKABLE void loadFromJson(const QString &filePath);
-    Q_INVOKABLE void saveToJson(const QString &filePath);
-    Q_INVOKABLE void exportJob(int index, const QString &filePath);
+    Q_INVOKABLE void saveToJson(const QString &filePath, const QList<int> &selectedIndexes);
 
 private:
     QList<PrintJob> m_jobs;

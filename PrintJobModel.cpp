@@ -1,5 +1,8 @@
 #include "PrintJobModel.h"
 #include <QFile>
+#include <QFileInfo>
+#include <QDir>
+#include <QUrl>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -98,21 +101,26 @@ void PrintJobModel::updateJob(int index, const QVariantMap &jobData) {
 }
 
 void PrintJobModel::loadFromJson(const QString &filePath) {
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly)) return;
+    const QString localPath = QUrl(filePath).toLocalFile();
+    qDebug() << "[LOAD JSON]" << localPath;
+
+    QFile file(localPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning() << "Failed to open file for reading:" << localPath;
+        return;
+    }
+
     QByteArray jsonData = file.readAll();
     file.close();
 
     QJsonDocument doc = QJsonDocument::fromJson(jsonData);
-    QJsonArray array = doc.array();
-    beginResetModel();
-    m_jobs.clear();
-    for (const QJsonValue &val : array) {
-        QJsonObject obj = val.toObject();
+    QList<PrintJob> newJobs;
+
+    auto parseObject = [&](const QJsonObject &obj) {
         PrintJob job;
         job.id = obj["id"].toString();
         job.name = obj["name"].toString();
-        job.imagePath = obj["imagePath"].toString();
+        job.imagePath = obj["imagePath"].toString();  // May be overwritten below
         job.paperSize = QSize(obj["paperSizeWidth"].toInt(), obj["paperSizeHeight"].toInt());
         job.resolution = QSize(obj["resolutionWidth"].toInt(), obj["resolutionHeight"].toInt());
         job.offset.setX(obj["offsetX"].toInt());
@@ -121,16 +129,62 @@ void PrintJobModel::loadFromJson(const QString &filePath) {
         job.varnishType = obj["varnishType"].toString();
         job.colorProfile = obj["colorProfile"].toString();
         job.createdAt = QDateTime::fromString(obj["createdAt"].toString(), Qt::ISODate);
-        m_jobs.append(job);
+
+        // If embedded image is present
+        if (obj.contains("imageData")) {
+            QByteArray imageData = QByteArray::fromBase64(obj["imageData"].toString().toUtf8());
+
+            QString originalExt = QFileInfo(job.imagePath).suffix();
+            if (originalExt.isEmpty())
+                originalExt = "png";
+
+            QString newPath = QFileInfo(localPath).absoluteDir().filePath(job.id + "." + originalExt);
+
+            QFile outImage(newPath);
+            if (outImage.open(QIODevice::WriteOnly)) {
+                outImage.write(imageData);
+                outImage.close();
+                job.imagePath = QUrl::fromLocalFile(newPath).toString();
+            }
+        }
+
+        newJobs.append(job);
+    };
+
+    if (doc.isArray()) {
+        for (const QJsonValue &val : doc.array()) {
+            parseObject(val.toObject());
+        }
     }
-    endResetModel();
+    else if (doc.isObject()) {
+        parseObject(doc.object());
+    }
+    else {
+        qWarning() << "Invalid JSON structure in" << filePath;
+        return;
+    }
+
+    beginInsertRows(QModelIndex(), m_jobs.size(), m_jobs.size() + newJobs.size() - 1);
+    m_jobs.append(newJobs);
+    endInsertRows();
 }
 
-void PrintJobModel::saveToJson(const QString &filePath) {
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly)) return;
+
+void PrintJobModel::saveToJson(const QString &filePath, const QList<int> &selectedIndexes) {
+    const QString localPath = QUrl(filePath).toLocalFile();
+    qDebug() << "[SAVE JSON]" << localPath;
+
+    QFile file(localPath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        qWarning() << "Failed to open file for writing:" << localPath;
+        return;
+    }
+
     QJsonArray array;
-    for (const PrintJob &job : m_jobs) {
+    for (int index : selectedIndexes) {
+        if (index < 0 || index >= m_jobs.size()) continue;
+        const PrintJob &job = m_jobs[index];
+
         QJsonObject obj;
         obj["id"] = job.id;
         obj["name"] = job.name;
@@ -145,34 +199,19 @@ void PrintJobModel::saveToJson(const QString &filePath) {
         obj["varnishType"] = job.varnishType;
         obj["colorProfile"] = job.colorProfile;
         obj["createdAt"] = job.createdAt.toString(Qt::ISODate);
+
+        // Embed image base64 if available
+        QFile imageFile(QUrl(job.imagePath).toLocalFile());
+        if (imageFile.open(QIODevice::ReadOnly)) {
+            QByteArray imageData = imageFile.readAll();
+            obj["imageData"] = QString::fromUtf8(imageData.toBase64());
+            imageFile.close();
+        }
+
         array.append(obj);
     }
-    QJsonDocument doc(array);
-    file.write(doc.toJson());
-    file.close();
-}
 
-void PrintJobModel::exportJob(int index, const QString &filePath) {
-    if (index < 0 || index >= m_jobs.size()) return;
-    const PrintJob &job = m_jobs.at(index);
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly)) return;
-    QJsonObject obj;
-    obj["id"] = job.id;
-    obj["name"] = job.name;
-    obj["imagePath"] = job.imagePath;
-    obj["paperSizeWidth"] = job.paperSize.width();
-    obj["paperSizeHeight"] = job.paperSize.height();
-    obj["resolutionWidth"] = job.resolution.width();
-    obj["resolutionHeight"] = job.resolution.height();
-    obj["offsetX"] = job.offset.x();
-    obj["offsetY"] = job.offset.y();
-    obj["whiteStrategy"] = job.whiteStrategy;
-    obj["varnishType"] = job.varnishType;
-    obj["colorProfile"] = job.colorProfile;
-    obj["colorProfile"] = job.colorProfile;
-    obj["createdAt"] = job.createdAt.toString(Qt::ISODate);
-    QJsonDocument doc(obj);
+    QJsonDocument doc(array);
     file.write(doc.toJson());
     file.close();
 }

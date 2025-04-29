@@ -2,8 +2,5 @@ Fix SVG anf PDF Validation
 Fix Save and PRN Output to one single file at time
 CLean up code and add comments
 Fix image preview to remove the edges of the rectangle if the image is smaller than the bounding area
-Fix Select All feature in Job List
-Fix Save and Load Job functions
-Fix PRN Output
-Automate the resolution field in Job Details to update when an image is loaded
-Add an Imposition VIew
+Add an Imposition View
+Remove uneeded tooltips

@@ -32,12 +32,23 @@ Item {
         return selectedIndexes.indexOf(index) !== -1
     }
 
+    function areAllJobsSelected() {
+        if (selectedIndexes.length !== jobModel.count)
+            return false
+
+        for (let i = 0; i < jobModel.count; ++i) {
+            if (selectedIndexes.indexOf(i) === -1)
+                return false
+        }
+        return true
+    }
+
     function selectAll() {
         let all = []
         for (let i = 0; i < jobModel.count; ++i) {
             all.push(i)
         }
-        selectedIndexes = all
+        selectedIndexes = all.slice() // <- Important: reassign it!
     }
 
     function deselectAll() {
@@ -82,10 +93,11 @@ Item {
 
             Button {
                 visible: selectionMode
-                text: selectedIndexes.length === jobModel.count ? "Deselect All" : "Select All"
+                text: areAllJobsSelected() ? "Deselect All" : "Select All"
                 onClicked: {
-                    if (selectedIndexes.length === jobModel.count) {
-                        deselectAll()
+                    if (areAllJobsSelected()) {
+                        selectAll()
+                        //deselectAll()
                     } else {
                         selectAll()
                     }
@@ -97,8 +109,9 @@ Item {
                 visible: selectionMode
                 enabled: selectedIndexes.length > 0
                 onClicked: {
-                    for (let i = selectedIndexes.length - 1; i >= 0; i--) {
-                        jobModel.removeJob(selectedIndexes[i])
+                    const sorted = selectedIndexes.slice().sort((a, b) => b - a)
+                    for (let i = 0; i < sorted.length; ++i) {
+                        jobModel.removeJob(sorted[i])
                     }
                     selectedIndexes = []
                 }
@@ -161,7 +174,7 @@ Item {
                         CheckBox {
                             visible: selectionMode
                             checked: isSelected(index)
-                            onClicked: toggleSelection(index)
+                            onToggled: toggleSelection(index)
                         }
 
                         Label {
@@ -205,16 +218,6 @@ Item {
                 }
             }
 
-            /*
-            Button {
-                text: "Output PRN"
-                enabled: selectedIndexes.length > 0
-                onClicked: outputFileDialog.open()
-                ToolTip.text: "Generate PRN output file(s) for the selected job(s)."
-                ToolTip.visible: hovered
-            }
-            */
-
             Button {
                 text: "Print Job"
                 enabled: selectedIndexes.length > 0
@@ -235,7 +238,11 @@ Item {
             id: openFileDialog
             title: "Load Jobs from JSON"
             nameFilters: ["JSON Files (*.json)"]
-            onAccepted: jobModel.loadFromJson(file)
+            fileMode: FileDialog.OpenFile
+            onAccepted: {
+                console.log("Opening file:", file)
+                jobModel.loadFromJson(file)
+            }
         }
 
         FileDialog {
@@ -244,7 +251,11 @@ Item {
             nameFilters: ["JSON Files (*.json)"]
             fileMode: FileDialog.SaveFile
             currentFile: suggestedFilename
-            onAccepted: jobModel.saveToJson(file)
+            defaultSuffix: "json"
+            onAccepted: {
+                console.log("Saving file:", file)
+                jobModel.saveToJson(file, selectedIndexes)
+            }
         }
 
         FileDialog {
