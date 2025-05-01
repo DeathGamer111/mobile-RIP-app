@@ -177,9 +177,6 @@ Page {
             Button {
                 text: "Cancel"
                 onClicked: {
-                //    appState.selectedPrinter = ""
-                //    appState.selectedPPD = ""
-                //    appState.usingSimulatedPrinter = false
                     stackView.pop()
                 }
             }

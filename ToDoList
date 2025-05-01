@@ -1,6 +1,8 @@
 Fix SVG anf PDF Validation
-Fix Save and PRN Output to one single file at time
-CLean up code and add comments
 Fix image preview to remove the edges of the rectangle if the image is smaller than the bounding area
 Add an Imposition View
-Remove uneeded tooltips
+Fix Croping
+Fix Brightness, Hue, and Saturation settings
+Fix Undo/Redo buttons
+Fix Draw Text / Draw shapes
+Check Supported options functions inside PrintJobOutput

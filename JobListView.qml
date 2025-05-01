@@ -8,9 +8,8 @@ import QtCore
 Item {
     id: root
     required property StackView stackView
+    required property var jobModel
     required property var appState
-
-    signal openJobDetails(int jobIndex)
 
     property bool selectionMode: false
     property var selectedIndexes: []
@@ -19,17 +18,21 @@ Item {
     anchors.fill: parent
 
     function toggleSelection(index) {
-        const i = selectedIndexes.indexOf(index)
-        if (i >= 0) {
-            selectedIndexes.splice(i, 1)
+        const exists = selectedIndexes.includes(index)
+        const updated = selectedIndexes.slice()
+
+        if (exists) {
+            const i = updated.indexOf(index)
+            updated.splice(i, 1)
         } else {
-            selectedIndexes.push(index)
+            updated.push(index)
         }
-        selectedIndexes = selectedIndexes.slice()
+
+        selectedIndexes = updated
     }
 
     function isSelected(index) {
-        return selectedIndexes.indexOf(index) !== -1
+        return selectedIndexes.includes(index)
     }
 
     function areAllJobsSelected() {
@@ -44,11 +47,16 @@ Item {
     }
 
     function selectAll() {
-        let all = []
-        for (let i = 0; i < jobModel.count; ++i) {
+        const total = jobModel.count
+        if (total === 0)
+            return
+
+        const all = []
+        for (let i = 0; i < total; ++i) {
             all.push(i)
         }
-        selectedIndexes = all.slice() // <- Important: reassign it!
+
+        selectedIndexes = all
     }
 
     function deselectAll() {
@@ -86,18 +94,21 @@ Item {
             Button {
                 text: selectionMode ? "Cancel Selection" : "Select Jobs"
                 onClicked: {
-                    selectionMode = !selectionMode
-                    if (!selectionMode) selectedIndexes = []
+                    if (selectionMode) {
+                        selectedIndexes = []
+                        selectionMode = false
+                    } else {
+                        selectionMode = true
+                    }
                 }
             }
 
             Button {
-                visible: selectionMode
                 text: areAllJobsSelected() ? "Deselect All" : "Select All"
+                visible: selectionMode
                 onClicked: {
-                    if (areAllJobsSelected()) {
-                        selectAll()
-                        //deselectAll()
+                    if (selectedIndexes.length === jobModel.count) {
+                        deselectAll()
                     } else {
                         selectAll()
                     }
@@ -124,7 +135,12 @@ Item {
                 onClicked: {
                     let jobName = jobModel.getJob(selectedIndexes[0]).name || "UntitledJob"
                     jobName = jobName.replace(/[^a-zA-Z0-9_-]/g, "_")
-                    suggestedFilename = jobName + ".json"
+
+                    // Set the full path using a writable location
+                    const downloads = StandardPaths.writableLocation(StandardPaths.DownloadLocation)
+                    const fullPath = downloads + "/" + jobName + ".json"
+
+                    saveFileDialog.currentFile = fullPath
                     saveFileDialog.open()
                 }
             }
@@ -163,7 +179,12 @@ Item {
                         if (selectionMode) {
                             toggleSelection(index)
                         } else {
-                            openJobDetails(index)
+                            stackView.push("qrc:/JobDetailsView.qml", {
+                                jobIndex: index,
+                                stackView: stackView,
+                                appState: appState,
+                                jobModel: jobModel
+                            })
                         }
                     }
 
@@ -194,7 +215,9 @@ Item {
 
             Button {
                 text: "Add New Job"
-                onClicked: jobModel.addJob("New Print Job")
+                onClicked: {
+                    jobModel.addJob("New Print Job")
+                }
             }
 
             Button {
@@ -250,8 +273,8 @@ Item {
             title: "Save Jobs to JSON"
             nameFilters: ["JSON Files (*.json)"]
             fileMode: FileDialog.SaveFile
-            currentFile: suggestedFilename
             defaultSuffix: "json"
+
             onAccepted: {
                 console.log("Saving file:", file)
                 jobModel.saveToJson(file, selectedIndexes)

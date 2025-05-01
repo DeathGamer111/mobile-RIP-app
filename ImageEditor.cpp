@@ -6,11 +6,15 @@
 using namespace Magick;
 
 
+/*****************************************************
+    ImageEditor constructor, Initializes ImageMagick.
+*****************************************************/
 ImageEditor::ImageEditor(QObject *parent) : QObject(parent) {
     InitializeMagick(nullptr);
 }
 
 
+// Load an image from the provided file path
 bool ImageEditor::loadImage(const QString &path) {
     try {
         QString localPath = QUrl(path).toLocalFile();
@@ -25,6 +29,7 @@ bool ImageEditor::loadImage(const QString &path) {
 }
 
 
+// Save the currently loaded image to a specified output path
 bool ImageEditor::saveImage(const QString &outputPath) {
     if (!m_imageLoaded) {
         qWarning() << "No image loaded.";
@@ -41,6 +46,7 @@ bool ImageEditor::saveImage(const QString &outputPath) {
 }
 
 
+// Delete a file from disk, used to delete the temporary image used in editing
 bool ImageEditor::deleteFile(const QString &path) {
     QString localPath = QUrl(path).toLocalFile();
 
@@ -59,6 +65,7 @@ bool ImageEditor::deleteFile(const QString &path) {
 }
 
 
+// Convert image to target color space (Gray, CMYK, RGB, and ICC)
 bool ImageEditor::convertColorSpace(const QString &targetSpace) {
     if (!m_imageLoaded) return false;
 
@@ -81,6 +88,7 @@ bool ImageEditor::convertColorSpace(const QString &targetSpace) {
 }
 
 
+// Resize the image to specified width and height
 bool ImageEditor::resizeImage(int width, int height) {
     if (!m_imageLoaded) return false;
 
@@ -94,6 +102,7 @@ bool ImageEditor::resizeImage(int width, int height) {
 }
 
 
+// Rotate image by a given number of degrees
 bool ImageEditor::rotate(double degrees) {
     if (!m_imageLoaded) return false;
 
@@ -106,6 +115,7 @@ bool ImageEditor::rotate(double degrees) {
 }
 
 
+// Flip the image horizontally or vertically
 bool ImageEditor::flip(const QString &direction) {
     if (!m_imageLoaded) return false;
 
@@ -123,6 +133,7 @@ bool ImageEditor::flip(const QString &direction) {
 }
 
 
+// Crop the image to a specific rectangle (x, y, width, height)
 bool ImageEditor::crop(int x, int y, int width, int height) {
     if (!m_imageLoaded) return false;
 
@@ -135,6 +146,7 @@ bool ImageEditor::crop(int x, int y, int width, int height) {
 }
 
 
+// Adjust image brightness and contrast
 bool ImageEditor::adjustBrightnessContrast(int brightness, int contrast) {
     if (!m_imageLoaded) return false;
 
@@ -151,6 +163,7 @@ bool ImageEditor::adjustBrightnessContrast(int brightness, int contrast) {
 }
 
 
+// Resize image to its original dimensions
 bool ImageEditor::resizeToOriginal() {
     if (!m_imageLoaded) return false;
     try {
@@ -163,6 +176,7 @@ bool ImageEditor::resizeToOriginal() {
 }
 
 
+// Resize image to half its current size
 bool ImageEditor::resizeToHalf() {
     if (!m_imageLoaded) return false;
     try {
@@ -174,6 +188,7 @@ bool ImageEditor::resizeToHalf() {
 }
 
 
+// Resize image to double its current size
 bool ImageEditor::resizeToDouble() {
     if (!m_imageLoaded) return false;
     try {
@@ -185,6 +200,7 @@ bool ImageEditor::resizeToDouble() {
 }
 
 
+// Adjust image hue level
 bool ImageEditor::adjustHue(int hue) {
     if (!m_imageLoaded) return false;
     try {
@@ -196,6 +212,7 @@ bool ImageEditor::adjustHue(int hue) {
 }
 
 
+// Adjust image saturation level
 bool ImageEditor::adjustSaturation(int saturation) {
     if (!m_imageLoaded) return false;
     try {
@@ -207,6 +224,7 @@ bool ImageEditor::adjustSaturation(int saturation) {
 }
 
 
+// Apply gamma correction
 bool ImageEditor::adjustGamma(double gamma) {
     if (!m_imageLoaded) return false;
     try {
@@ -218,6 +236,7 @@ bool ImageEditor::adjustGamma(double gamma) {
 }
 
 
+// Apply sharpening effect using radius and sigma
 bool ImageEditor::sharpenImage(double radius, double sigma) {
     if (!m_imageLoaded) return false;
     try {
@@ -229,6 +248,7 @@ bool ImageEditor::sharpenImage(double radius, double sigma) {
 }
 
 
+// Apply Gaussian blur using radius and sigma
 bool ImageEditor::applyBlur(double radius, double sigma) {
     if (!m_imageLoaded) return false;
     try {
@@ -240,6 +260,7 @@ bool ImageEditor::applyBlur(double radius, double sigma) {
 }
 
 
+// Apply sepia tone effect to image
 bool ImageEditor::applySepia(double threshold) {
     if (!m_imageLoaded) return false;
     try {
@@ -251,6 +272,7 @@ bool ImageEditor::applySepia(double threshold) {
 }
 
 
+// Apply vignette effect
 bool ImageEditor::applyVignette() {
     if (!m_imageLoaded) return false;
     try {
@@ -262,6 +284,7 @@ bool ImageEditor::applyVignette() {
 }
 
 
+// Apply swirl distortion effect
 bool ImageEditor::applySwirl(double degrees) {
     if (!m_imageLoaded) return false;
     try {
@@ -273,6 +296,7 @@ bool ImageEditor::applySwirl(double degrees) {
 }
 
 
+// Apply implode effect using a distortion factor
 bool ImageEditor::applyImplode(double factor) {
     if (!m_imageLoaded) return false;
     try {
@@ -284,6 +308,7 @@ bool ImageEditor::applyImplode(double factor) {
 }
 
 
+// Draw text on the image at specified coordinates
 bool ImageEditor::drawText(const QString &text, int x, int y) {
     if (!m_imageLoaded) return false;
 
@@ -302,6 +327,7 @@ bool ImageEditor::drawText(const QString &text, int x, int y) {
 }
 
 
+// Draw a rectangle at (x, y) with width and height
 bool ImageEditor::drawRectangle(int x, int y, int w, int h) {
     if (!m_imageLoaded) return false;
 

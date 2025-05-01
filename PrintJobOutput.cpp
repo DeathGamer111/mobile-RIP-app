@@ -12,8 +12,13 @@
 #include <QSet>
 
 
+/****************************************************************************
+    PrintJobOutput Constructor: initializes and refreshes available printers.
+****************************************************************************/
 PrintJobOutput::PrintJobOutput(QObject *parent) : QObject(parent) { refreshDetectedPrinters(); }
 
+
+// Destructor: frees PPD and printerInfo if loaded.
 PrintJobOutput::~PrintJobOutput() {
     if (printerInfo) {
         cupsFreeDestInfo(printerInfo);
@@ -23,6 +28,8 @@ PrintJobOutput::~PrintJobOutput() {
     }
 }
 
+
+// Load a printer by name and cache its detailed info
 bool PrintJobOutput::loadPrinter(const QString &printerName) {
     this->printerName = printerName;
 
@@ -54,6 +61,7 @@ bool PrintJobOutput::loadPrinter(const QString &printerName) {
 }
 
 
+// Load a PPD file into memory
 bool PrintJobOutput::loadPPDFile(const QString &ppdPath) {
 
     QString localInputPath = QUrl(ppdPath).toLocalFile();
@@ -79,6 +87,7 @@ bool PrintJobOutput::loadPPDFile(const QString &ppdPath) {
 }
 
 
+// Register a virtual printer using the given PPD file
 bool PrintJobOutput::registerPrinterFromPPD(const QString &printerName, const QString &ppdPath) {
 
     http_t *http = httpConnect2("localhost", ippPort(), nullptr, AF_UNSPEC, HTTP_ENCRYPT_IF_REQUESTED, 1, 3000, nullptr);
@@ -129,11 +138,13 @@ bool PrintJobOutput::registerPrinterFromPPD(const QString &printerName, const QS
 }
 
 
+// Return list of currently detected printers
 QStringList PrintJobOutput::detectedPrinters() const {
     return m_detectedPrinters;
 }
 
 
+// Refresh printer list from the system
 void PrintJobOutput::refreshDetectedPrinters() {
     QStringList printerList;
 
@@ -160,13 +171,13 @@ void PrintJobOutput::refreshDetectedPrinters() {
 }
 
 
+// Apply PPD options based on PrintJob fields
 void PrintJobOutput::markPpdOptionsFromJob(const PrintJob &job) {
     if (!ppd) {
         qWarning() << "PPD not loaded. Cannot mark options.";
         return;
     }
 
-    // You can adapt these mappings to actual PPD keys as needed
     if (!job.whiteStrategy.isEmpty()) {
         ppdMarkOption(ppd, "WhiteStrategy", job.whiteStrategy.toUtf8().constData());
     }
@@ -179,7 +190,6 @@ void PrintJobOutput::markPpdOptionsFromJob(const PrintJob &job) {
         ppdMarkOption(ppd, "ColorProfile", job.colorProfile.toUtf8().constData());
     }
 
-    // Example: Handle page size from job
     if (job.paperSize == QSize(210, 297)) {
         ppdMarkOption(ppd, "PageSize", "A4");
     } else if (job.paperSize == QSize(216, 279)) {
@@ -187,32 +197,22 @@ void PrintJobOutput::markPpdOptionsFromJob(const PrintJob &job) {
     } else if (job.paperSize == QSize(279, 432)) {
         ppdMarkOption(ppd, "PageSize", "Tabloid");
     } else {
-        // Could define a "Custom" mapping or fallback
         qDebug() << "Custom paper size:" << job.paperSize;
     }
 }
 
 
-QStringList PrintJobOutput::supportedResolutions() const {
-    return getSupportedValues("Resolution");
-}
+// Retrieve supported options
+QStringList PrintJobOutput::supportedResolutions() const { return getSupportedValues("Resolution"); }
+
+QStringList PrintJobOutput::supportedMediaSizes() const { return getSupportedValues("media"); }
+
+QStringList PrintJobOutput::supportedDuplexModes() const { return getSupportedValues("Duplex"); }
+
+QStringList PrintJobOutput::supportedColorModes() const { return getSupportedValues("PrintColorMode"); }
 
 
-QStringList PrintJobOutput::supportedMediaSizes() const {
-    return getSupportedValues("media");
-}
-
-
-QStringList PrintJobOutput::supportedDuplexModes() const {
-    return getSupportedValues("Duplex");
-}
-
-
-QStringList PrintJobOutput::supportedColorModes() const {
-    return getSupportedValues("PrintColorMode");
-}
-
-
+// Check if a printer option is supported
 bool PrintJobOutput::isOptionSupported(const QString &option) const {
     if (!printerInfo || printerName.isEmpty()) return false;
 
@@ -232,6 +232,8 @@ bool PrintJobOutput::isOptionSupported(const QString &option) const {
     return supported;
 }
 
+
+// Check if a specific value for an option is supported
 bool PrintJobOutput::isOptionValueSupported(const QString &option, const QString &value) const {
     if (!printerInfo || printerName.isEmpty()) return false;
 
@@ -245,14 +247,18 @@ bool PrintJobOutput::isOptionValueSupported(const QString &option, const QString
         return false;
     }
 
-    bool supported = cupsCheckDestSupported(CUPS_HTTP_DEFAULT, dest, printerInfo,
-                                            option.toUtf8().constData(),
-                                            value.toUtf8().constData());
+    bool supported = cupsCheckDestSupported(
+        CUPS_HTTP_DEFAULT, dest, printerInfo,
+        option.toUtf8().constData(),
+        value.toUtf8().constData()
+    );
 
     cupsFreeDests(num_dests, dests);
     return supported;
 }
 
+
+// Return the default value for a given printer option
 QString PrintJobOutput::getDefaultOptionValue(const QString &option) const {
     if (!printerInfo || printerName.isEmpty()) return QString();
 
@@ -277,6 +283,8 @@ QString PrintJobOutput::getDefaultOptionValue(const QString &option) const {
     return def;
 }
 
+
+// Return supported values for a given printer option
 QStringList PrintJobOutput::getSupportedValues(const QString &option) const {
     QStringList values;
 
@@ -307,6 +315,7 @@ QStringList PrintJobOutput::getSupportedValues(const QString &option) const {
 }
 
 
+// Infer MIME type for cupsWriteRequestData
 static const char* inferCupsMimeType(const QString &path) {
     QMimeDatabase db;
     QString mime = db.mimeTypeForFile(path).name();
@@ -321,7 +330,7 @@ static const char* inferCupsMimeType(const QString &path) {
 }
 
 
-// Called by frontend to pass the Job into PrintJobOutput
+// Wrapper for the frontend: build PrintJob from map and generate PRN
 bool PrintJobOutput::generatePRN(const QVariantMap &jobMap, const QString &inputFile, const QString &outputPath) {
     PrintJob job;
     job.name = jobMap["name"].toString();
@@ -339,6 +348,7 @@ bool PrintJobOutput::generatePRN(const QVariantMap &jobMap, const QString &input
 }
 
 
+// Generate PRN using CUPS job/document flow
 bool PrintJobOutput::generatePRN(const PrintJob &job, const QString &inputFile, const QString &outputPath) {
     if (printerName.isEmpty()) {
         qWarning() << "Printer not loaded.";
@@ -434,6 +444,7 @@ bool PrintJobOutput::generatePRN(const PrintJob &job, const QString &inputFile, 
 }
 
 
+// Generate PRN using cupsfilter (fallback method)
 bool PrintJobOutput::generatePRNviaFilter(const QVariantMap &jobMap, const QString &inputFile, const QString &outputPath) {
     PrintJob job;
     job.name = jobMap["name"].toString();
@@ -449,6 +460,7 @@ bool PrintJobOutput::generatePRNviaFilter(const QVariantMap &jobMap, const QStri
 }
 
 
+// Use cupsfilter CLI to generate PRN output manually
 bool PrintJobOutput::generatePRNviaFilter(const PrintJob &job, const QString ppdPath, const QString &inputFile, const QString &outputPath) {
 
     QString localOutputPath = QUrl(outputPath).toLocalFile();

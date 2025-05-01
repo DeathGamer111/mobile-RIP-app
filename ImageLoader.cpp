@@ -10,11 +10,15 @@
 #include <QDebug>
 
 
+/*******************************************************************
+    ImageLoader constructor, Initializes supported file extensions.
+*******************************************************************/
 ImageLoader::ImageLoader(QObject *parent) : QObject(parent) {
     supportedExtensions = { ".jpeg", ".jpg", ".png", ".bmp", ".tiff", ".tif", ".svg", ".pdf" };
 }
 
 
+// Extract and normalize the file extension from the given path
 QString ImageLoader::getFileExtension(const QString &path) {
     QUrl url(path);
     QString localPath = url.isLocalFile() ? url.toLocalFile() : path;
@@ -22,17 +26,20 @@ QString ImageLoader::getFileExtension(const QString &path) {
 }
 
 
+// Check whether the file extension is supported
 bool ImageLoader::isSupportedExtension(const QString &path) {
     return supportedExtensions.contains("." + getFileExtension(path));
 }
 
 
+// Extract metadata for supported image, SVG, or PDF files
 QVariantMap ImageLoader::extractMetadata(const QString &path) {
     QString ext = getFileExtension(path);
     return (ext == "svg" || ext == "pdf") ? inspectSvgOrPdf(path) : inspectImage(path);
 }
 
 
+// Validate that a file exists and is readable by its format type
 bool ImageLoader::validateFile(const QString &path) {
     QUrl url(path);
     QString localPath = url.isLocalFile() ? url.toLocalFile() : path;
@@ -64,7 +71,8 @@ bool ImageLoader::validateFile(const QString &path) {
             qDebug() << "Image loaded successfully with dimensions:" << w << "x" << h << "and channels:" << c;
             stbi_image_free(data);
             return true;
-        } else {
+        }
+        else {
             qWarning() << "stbi_load_from_memory failed:" << stbi_failure_reason();
             return false;
         }
@@ -89,6 +97,7 @@ bool ImageLoader::validateFile(const QString &path) {
 }
 
 
+// Extract metadata (dimensions, format hints) from bitmap image files
 QVariantMap ImageLoader::inspectImage(const QString &path) {
     QVariantMap meta;
     QUrl url(path);
@@ -108,6 +117,7 @@ QVariantMap ImageLoader::inspectImage(const QString &path) {
     if (!data) return meta;
     stbi_image_free(data);
 
+    // Basic metadata
     meta["name"] = info.fileName();
     meta["size"] = info.size();
     meta["width"] = w;
@@ -115,7 +125,7 @@ QVariantMap ImageLoader::inspectImage(const QString &path) {
     meta["channels"] = c;
     meta["extension"] = "." + info.suffix().toLower();
 
-    // Check for color profile hints
+    // Attempt to infer color profile from content
     QString content(imageData);
     QString profile = "Unknown";
 
@@ -138,6 +148,7 @@ QVariantMap ImageLoader::inspectImage(const QString &path) {
 }
 
 
+// Extract metadata from vector/PDF files (name, size, basic format)
 QVariantMap ImageLoader::inspectSvgOrPdf(const QString &path) {
     QVariantMap meta;
     QUrl url(path);

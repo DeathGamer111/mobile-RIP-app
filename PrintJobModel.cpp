@@ -7,12 +7,20 @@
 #include <QJsonObject>
 #include <QJsonArray>
 
+
+/***********************************************************
+    PrintJobModel constructor, passes in the parent pointer
+************************************************************/
 PrintJobModel::PrintJobModel(QObject *parent) : QAbstractListModel(parent) {}
 
+
+// Return number of jobs in the model
 int PrintJobModel::rowCount(const QModelIndex &) const {
     return m_jobs.count();
 }
 
+
+// Return data for a given job and role
 QVariant PrintJobModel::data(const QModelIndex &index, int role) const {
     if (!index.isValid() || index.row() < 0 || index.row() >= m_jobs.size()) return QVariant();
     const PrintJob &job = m_jobs.at(index.row());
@@ -31,6 +39,8 @@ QVariant PrintJobModel::data(const QModelIndex &index, int role) const {
     }
 }
 
+
+// Map internal role IDs to role names for QML
 QHash<int, QByteArray> PrintJobModel::roleNames() const {
     return {
         {IdRole, "id"},
@@ -46,6 +56,8 @@ QHash<int, QByteArray> PrintJobModel::roleNames() const {
     };
 }
 
+
+// Add a new print job with default values
 void PrintJobModel::addJob(const QString &name) {
     beginInsertRows(QModelIndex(), m_jobs.size(), m_jobs.size());
     PrintJob job;
@@ -60,15 +72,21 @@ void PrintJobModel::addJob(const QString &name) {
     job.colorProfile = "sRGB";          // optional default
     m_jobs.append(job);
     endInsertRows();
+    emit countChanged();
 }
 
+
+// Remove a job by index position
 void PrintJobModel::removeJob(int index) {
     if (index < 0 || index >= m_jobs.size()) return;
     beginRemoveRows(QModelIndex(), index, index);
     m_jobs.removeAt(index);
     endRemoveRows();
+    emit countChanged();
 }
 
+
+// Return a print job as a QVariantMap
 QVariantMap PrintJobModel::getJob(int index) const {
     QVariantMap map;
     if (index < 0 || index >= m_jobs.size()) return map;
@@ -86,6 +104,8 @@ QVariantMap PrintJobModel::getJob(int index) const {
     return map;
 }
 
+
+// Update a print job from a QVariantMap
 void PrintJobModel::updateJob(int index, const QVariantMap &jobData) {
     if (index < 0 || index >= m_jobs.size()) return;
     PrintJob &job = m_jobs[index];
@@ -100,6 +120,8 @@ void PrintJobModel::updateJob(int index, const QVariantMap &jobData) {
     emit dataChanged(this->index(index), this->index(index));
 }
 
+
+// Load jobs from a JSON file (with optional embedded images)
 void PrintJobModel::loadFromJson(const QString &filePath) {
     const QString localPath = QUrl(filePath).toLocalFile();
     qDebug() << "[LOAD JSON]" << localPath;
@@ -116,6 +138,7 @@ void PrintJobModel::loadFromJson(const QString &filePath) {
     QJsonDocument doc = QJsonDocument::fromJson(jsonData);
     QList<PrintJob> newJobs;
 
+    // Parse a single PrintJob from JSON
     auto parseObject = [&](const QJsonObject &obj) {
         PrintJob job;
         job.id = obj["id"].toString();
@@ -130,7 +153,7 @@ void PrintJobModel::loadFromJson(const QString &filePath) {
         job.colorProfile = obj["colorProfile"].toString();
         job.createdAt = QDateTime::fromString(obj["createdAt"].toString(), Qt::ISODate);
 
-        // If embedded image is present
+        // If image data is embedded, reconstruct the image file
         if (obj.contains("imageData")) {
             QByteArray imageData = QByteArray::fromBase64(obj["imageData"].toString().toUtf8());
 
@@ -151,6 +174,7 @@ void PrintJobModel::loadFromJson(const QString &filePath) {
         newJobs.append(job);
     };
 
+    // Handle both array and single object formats
     if (doc.isArray()) {
         for (const QJsonValue &val : doc.array()) {
             parseObject(val.toObject());
@@ -167,12 +191,13 @@ void PrintJobModel::loadFromJson(const QString &filePath) {
     beginInsertRows(QModelIndex(), m_jobs.size(), m_jobs.size() + newJobs.size() - 1);
     m_jobs.append(newJobs);
     endInsertRows();
+    emit countChanged();
 }
 
 
+// Save selected jobs to JSON file, embedding image data as base64
 void PrintJobModel::saveToJson(const QString &filePath, const QList<int> &selectedIndexes) {
     const QString localPath = QUrl(filePath).toLocalFile();
-    qDebug() << "[SAVE JSON]" << localPath;
 
     QFile file(localPath);
     if (!file.open(QIODevice::WriteOnly)) {

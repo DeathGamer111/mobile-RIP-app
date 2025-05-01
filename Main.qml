@@ -19,17 +19,12 @@ ApplicationWindow {
         id: stackView
         anchors.fill: parent
 
-        // Start on Job List View
-        initialItem: JobListView {
-            stackView: stackView
-            appState: appState
-            onOpenJobDetails: (jobIndex) => {
-                stackView.push(Qt.createComponent("JobDetailsView.qml"), {
-                    jobIndex: jobIndex,
-                    stackView: stackView,
-                    appState: appState
-                })
-            }
+        Component.onCompleted: {
+            stackView.push("qrc:/JobListView.qml", {
+                stackView: stackView,
+                appState: appState,
+                jobModel: jobModel
+            })
         }
     }
 }
