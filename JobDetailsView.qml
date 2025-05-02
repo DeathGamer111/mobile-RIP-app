@@ -202,6 +202,16 @@ Item {
                                     stackView.push("qrc:/ImageEditorView.qml", { "imagePath": imagePath })
                                 }
                             }
+
+                            Button {
+                                text: "Edit Imposition"
+                                ToolTip.text: "Open Imposition editor to arrange how items will print out on the media"
+                                ToolTip.visible: hovered
+                                enabled: imagePath !== ""
+                                onClicked: {
+                                    stackView.push("qrc:/ImpositionView.qml", { "jobData": jobData })
+                                }
+                            }
                         }
 
                         FileDialog {

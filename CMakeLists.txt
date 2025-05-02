@@ -28,6 +28,8 @@ qt_add_executable(appRIPPrinterApp
     ImageEditor.h ImageEditor.cpp
     ImageEditorView.qml
     PrinterSetupView.qml
+    ImpositionView.qml
+    DraggableItem.qml
 )
 
 
@@ -47,7 +49,9 @@ qt_add_resources(appRIPPrinterApp "qml"
         JobListView.qml
         JobDetailsView.qml
         ImageEditorView.qml
+        ImpositionView.qml
         PrinterSetupView.qml
+        DraggableItem.qml
         Toast.qml
 )
 

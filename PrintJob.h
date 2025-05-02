@@ -7,12 +7,13 @@
 /*******************************************************************
     PrintJob struct encapsulates all relevant data for a print task.
     Used as a model for job management, configuration, and output.
- *******************************************************************/
+********************************************************************/
 
 struct PrintJob {
     QString id;                 // Unique identifier for the job
     QString name;               // Display name
     QString imagePath;          // Path to the input image
+    QSize imagePosition;        // Image Position set by ImpositionView
 
     QSize paperSize;            // Paper size in pixels (or user-defined)
     QSize resolution;           // Output resolution (DPI)
