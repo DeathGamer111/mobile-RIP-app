@@ -5,6 +5,7 @@
 #include "ImageLoader.h"
 #include "PrintJobOutput.h"
 #include "ImageEditor.h"
+#include "ColorProfile.h"
 
 
 /****************************************************************************
@@ -22,12 +23,14 @@ int main(int argc, char *argv[]) {
     ImageLoader imageLoader;
     ImageEditor imageEditor;
     PrintJobOutput printJobOutput;
+    ColorProfile colorProfile;
 
     // Expose C++ objects to QML context
     engine.rootContext()->setContextProperty("jobModel", &jobModel);
     engine.rootContext()->setContextProperty("imageLoader", &imageLoader);
     engine.rootContext()->setContextProperty("imageEditor", &imageEditor);
     engine.rootContext()->setContextProperty("printJobOutput", &printJobOutput);
+    engine.rootContext()->setContextProperty("colorProfile", &colorProfile);
 
     // Load the main QML UI
     engine.load(QUrl(QStringLiteral("qrc:/Main.qml")));

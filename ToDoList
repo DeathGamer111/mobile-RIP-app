@@ -7,3 +7,4 @@ Fix Undo/Redo buttons
 Fix Draw Text / Draw shapes
 Check Supported options functions inside PrintJobOutput
 Hook up image position to PrintOutput
+Fix Litte CMS for Android build

@@ -65,29 +65,6 @@ bool ImageEditor::deleteFile(const QString &path) {
 }
 
 
-// Convert image to target color space (Gray, CMYK, RGB, and ICC)
-bool ImageEditor::convertColorSpace(const QString &targetSpace) {
-    if (!m_imageLoaded) return false;
-
-    try {
-        if (targetSpace == "Gray") {
-            m_image.type(GrayscaleType);
-        } else if (targetSpace == "CMYK") {
-            m_image.colorSpace(MagickCore::CMYKColorspace);
-        } else if (targetSpace == "RGB") {
-            m_image.colorSpace(MagickCore::RGBColorspace);
-        } else {
-            qWarning() << "Unsupported color space:" << targetSpace;
-            return false;
-        }
-        return true;
-    } catch (const Magick::Exception &e) {
-        qWarning() << "Color space conversion failed:" << e.what();
-        return false;
-    }
-}
-
-
 // Resize the image to specified width and height
 bool ImageEditor::resizeImage(int width, int height) {
     if (!m_imageLoaded) return false;

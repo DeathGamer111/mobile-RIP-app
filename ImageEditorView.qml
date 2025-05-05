@@ -257,22 +257,6 @@ Page {
                             }
                         }
 
-                        // === Color Space Tools ===
-                        GroupBox {
-                            title: "Color Space"
-                            Layout.fillWidth: true
-
-                            GridLayout {
-                                columns: 4
-                                anchors.horizontalCenter: parent.horizontalCenter
-
-                                Button { text: "Grayscale"; onClicked: apply("colorspace", "Gray") }
-                                Button { text: "RGB"; onClicked: apply("colorspace", "RGB") }
-                                Button { text: "CMYK"; onClicked: apply("colorspace", "CMYK") }
-                                Button { text: "ICC Profile" }
-                            }
-                        }
-
                         // === Drawing Tools ===
                         GroupBox {
                             title: "Text Overlay"
@@ -386,7 +370,6 @@ Page {
         const actions = {
             "flip":                 () => imageEditor.flip(value),
             "rotate":               () => imageEditor.rotate(value),
-            "colorspace":           () => imageEditor.convertColorSpace(value),
             "brightnessContrast":   () => imageEditor.adjustBrightnessContrast(value.brightness, value.contrast),
             "hue":                  () => imageEditor.adjustHue(value),
             "saturation":           () => imageEditor.adjustSaturation(value),

@@ -11,6 +11,10 @@ Item {
     property string imagePath: jobData.imagePath
     property var imageMeta: ({})
     property var appState
+    property string selectedInputICC: ""
+    property string selectedOutputICC: ""
+    property bool loadingInputICC: true
+
 
     anchors.fill: parent
 
@@ -378,11 +382,87 @@ Item {
                                 ComboBox {
                                     id: profileBox
                                     Layout.fillWidth: true
-                                    model: ["sRGB", "AdobeRGB", "CMYK", "Gray", "Custom ICC"]
+                                    model: ["sRGB", "AdobeRGB", "CMYK", "Lc+Lm+Ly+Lk", "Grayscale", "Indexed8", "Indexed16", "Custom ICC"]
                                     currentIndex: model.indexOf(jobData.colorProfile)
-                                    onCurrentTextChanged: updateColorProfile()
-
                                     enabled: appState.selectedPrinter.length === 0 || isSupported(currentText, printJobOutput.supportedColorModes())
+                                }
+
+                                RowLayout {
+                                    spacing: 8
+                                    Layout.fillWidth: true
+
+                                    Button {
+                                        visible: profileBox.currentText === "Custom ICC"
+                                        text: "Load Input ICC"
+                                        onClicked: {
+                                            loadingInputICC = true
+                                            iccDialog.open()
+                                        }
+                                    }
+
+                                    Button {
+                                        visible: profileBox.currentText === "Custom ICC"
+                                        text: "Load Output ICC"
+                                        onClicked: {
+                                            loadingInputICC = false
+                                            iccDialog.open()
+                                        }
+                                    }
+
+                                    Button {
+                                        id: convertButton
+                                        text: "Convert Colorspace"
+                                        visible: profileBox.currentText !== jobData.colorProfile
+                                        enabled: imagePath !== ""
+                                        onClicked: {
+                                            var result = false
+                                            if (profileBox.currentText === "Custom ICC") {
+                                                colorProfile.loadProfiles(selectedInputICC, selectedOutputICC)
+                                                result = colorProfile.convertWithICCProfiles(imagePath, imagePath)
+                                            } else {
+                                                result = colorProfile.convertToColorspace(imagePath, profileBox.currentText)
+                                            }
+
+                                            if (result) {
+                                                updateColorProfile()
+                                                refreshPreview()
+                                                toast.show("Color space converted!")
+                                            } else {
+                                                toast.show("Color space conversion failed.")
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: "Input: " + selectedInputICC
+                                    visible: profileBox.currentText === "Custom ICC" && selectedInputICC !== ""
+                                    color: "lightgray"
+                                    wrapMode: Text.Wrap
+                                    font.pixelSize: 12
+                                }
+
+                                Text {
+                                    text: "Output: " + selectedOutputICC
+                                    visible: profileBox.currentText === "Custom ICC" && selectedOutputICC !== ""
+                                    color: "lightgray"
+                                    wrapMode: Text.Wrap
+                                    font.pixelSize: 12
+                                }
+
+                                FileDialog {
+                                    id: iccDialog
+                                    title: "Select ICC Profile"
+                                    nameFilters: ["ICC Profiles (*.icc *.icm)"]
+                                    onAccepted: {
+                                        if (loadingInputICC) {
+                                            selectedInputICC = file
+                                            colorProfile.setInputICC(file)
+                                        } else {
+                                            selectedOutputICC = file
+                                            colorProfile.setOutputICC(file)
+                                        }
+                                    }
                                 }
                             }
                         }

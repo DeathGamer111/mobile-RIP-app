@@ -14,22 +14,26 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(ImageMagick REQUIRED IMPORTED_TARGET Magick++)
 
 
+# Little CMS Setup
+pkg_check_modules(LCMS REQUIRED IMPORTED_TARGET lcms2)
+
+
 # Executable sources
 qt_add_executable(appRIPPrinterApp
     main.cpp
-    PrintJobModel.cpp
+    PrintJobModel.h PrintJobModel.cpp
+    PrintJobOutput.h PrintJobOutput.cpp
     ImageLoader.h ImageLoader.cpp
+    ImageEditor.h ImageEditor.cpp
+    ColorProfile.h ColorProfile.cpp
     stb_image.h
     JobListView.qml
     JobDetailsView.qml
-    PrintJobOutput.h PrintJobOutput.cpp
-    ToDoList
-    Toast.qml
-    ImageEditor.h ImageEditor.cpp
     ImageEditorView.qml
     PrinterSetupView.qml
     ImpositionView.qml
     DraggableItem.qml
+    Toast.qml
 )
 
 
@@ -38,7 +42,9 @@ target_sources(appRIPPrinterApp PRIVATE
     PrintJobModel.h
     PrintJob.h
     ImageLoader.h
+    ImageEditor.h
     PrintJobOutput.h
+    ColorProfile.h
 )
 
 
@@ -87,6 +93,7 @@ target_link_libraries(appRIPPrinterApp
     PRIVATE Qt6::Quick
     PRIVATE cups
     PRIVATE PkgConfig::ImageMagick
+    PRIVATE PkgConfig::LCMS
 )
 
 

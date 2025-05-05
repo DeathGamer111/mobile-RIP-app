@@ -25,9 +25,6 @@ public:
     Q_INVOKABLE bool flip(const QString &direction);                        // Flip image horizontally or vertically
     Q_INVOKABLE bool crop(int x, int y, int width, int height);             // Crop image to given rectangle
 
-    // Color space conversions
-    Q_INVOKABLE bool convertColorSpace(const QString &targetSpace);         // Convert to CMYK, sRGB, or GRAY
-
     // Resize operations
     Q_INVOKABLE bool resizeImage(int width, int height);                    // Resize to specific dimensions
     Q_INVOKABLE bool resizeToOriginal();                                    // Reset to original image size
