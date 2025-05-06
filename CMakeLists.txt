@@ -23,6 +23,7 @@ qt_add_executable(appRIPPrinterApp
     main.cpp
     PrintJobModel.h PrintJobModel.cpp
     PrintJobOutput.h PrintJobOutput.cpp
+    PrintJobNocaiOutput.h PrintJobNocaiOutput.cpp
     ImageLoader.h ImageLoader.cpp
     ImageEditor.h ImageEditor.cpp
     ColorProfile.h ColorProfile.cpp
@@ -44,6 +45,7 @@ target_sources(appRIPPrinterApp PRIVATE
     ImageLoader.h
     ImageEditor.h
     PrintJobOutput.h
+    PrintJobNocaiOutput.h
     ColorProfile.h
 )
 
@@ -59,6 +61,7 @@ qt_add_resources(appRIPPrinterApp "qml"
         PrinterSetupView.qml
         DraggableItem.qml
         Toast.qml
+        assets/logo.png
 )
 
 

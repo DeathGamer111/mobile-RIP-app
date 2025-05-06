@@ -18,151 +18,181 @@ Item {
     anchors.fill: parent
 
     function toggleSelection(index) {
-        const exists = selectedIndexes.includes(index)
-        const updated = selectedIndexes.slice()
+            const exists = selectedIndexes.includes(index)
+            const updated = selectedIndexes.slice()
 
-        if (exists) {
-            const i = updated.indexOf(index)
-            updated.splice(i, 1)
-        } else {
-            updated.push(index)
+            if (exists) {
+                const i = updated.indexOf(index)
+                updated.splice(i, 1)
+            } else {
+                updated.push(index)
+            }
+
+            selectedIndexes = updated
         }
 
-        selectedIndexes = updated
-    }
+        function isSelected(index) {
+            return selectedIndexes.includes(index)
+        }
 
-    function isSelected(index) {
-        return selectedIndexes.includes(index)
-    }
-
-    function areAllJobsSelected() {
-        if (selectedIndexes.length !== jobModel.count)
-            return false
-
-        for (let i = 0; i < jobModel.count; ++i) {
-            if (selectedIndexes.indexOf(i) === -1)
+        function areAllJobsSelected() {
+            if (selectedIndexes.length !== jobModel.count)
                 return false
-        }
-        return true
-    }
 
-    function selectAll() {
-        const total = jobModel.count
-        if (total === 0)
-            return
-
-        const all = []
-        for (let i = 0; i < total; ++i) {
-            all.push(i)
+            for (let i = 0; i < jobModel.count; ++i) {
+                if (selectedIndexes.indexOf(i) === -1)
+                    return false
+            }
+            return true
         }
 
-        selectedIndexes = all
-    }
+        function selectAll() {
+            const total = jobModel.count
+            if (total === 0)
+                return
 
-    function deselectAll() {
-        selectedIndexes = []
-    }
+            const all = []
+            for (let i = 0; i < total; ++i) {
+                all.push(i)
+            }
 
-    function printSelectedJobDirectly() {
-        const index = selectedIndexes[0]
-        const job = jobModel.getJob(index)
-        const inputFile = job.imagePath
-
-        const outputPath = "" // Empty because printing directly to printer
-
-        const success = printJobOutput.generatePRN(job, inputFile, outputPath)
-        if (success) {
-            console.log("Print job sent to printer:", appState.selectedPrinter)
-            toast.show("Print job sent successfully.")
-        } else {
-            console.warn("Failed to print job:", job.name)
-            toast.show("Failed to print job.")
+            selectedIndexes = all
         }
-    }
 
+        function deselectAll() {
+            selectedIndexes = []
+        }
+
+        function printSelectedJobDirectly() {
+            const index = selectedIndexes[0]
+            const job = jobModel.getJob(index)
+            const inputFile = job.imagePath
+
+            const outputPath = "" // Empty because printing directly to printer
+
+            const success = printJobOutput.generatePRN(job, inputFile, outputPath)
+            if (success) {
+                console.log("Print job sent to printer:", appState.selectedPrinter)
+                toast.show("Print job sent successfully.")
+            } else {
+                console.warn("Failed to print job:", job.name)
+                toast.show("Failed to print job.")
+            }
+        }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 20
-        spacing: 12
+        spacing: 0
 
-        // Top toolbar
-        RowLayout {
-            Layout.alignment: Qt.AlignHCenter
-            spacing: 10
+        // === Top Header ===
+        Rectangle {
+            height: 60
+            width: parent.width
+            color: "#2c3e50"
+            Layout.fillWidth: true
 
-            Button {
-                text: selectionMode ? "Cancel Selection" : "Select Jobs"
-                onClicked: {
-                    if (selectionMode) {
-                        selectedIndexes = []
-                        selectionMode = false
-                    } else {
-                        selectionMode = true
-                    }
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 15
+
+                Image {
+                    source: "qrc:/assets/logo.png"
+                    Layout.preferredWidth: 40
+                    Layout.preferredHeight: 40
+                    Layout.margins: 4
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
                 }
-            }
 
-            Button {
-                text: areAllJobsSelected() ? "Deselect All" : "Select All"
-                visible: selectionMode
-                onClicked: {
-                    if (selectedIndexes.length === jobModel.count) {
-                        deselectAll()
-                    } else {
-                        selectAll()
-                    }
+                Label {
+                    text: "Print Job Manager"
+                    font.pixelSize: 22
+                    color: "white"
+                    verticalAlignment: Text.AlignVCenter
                 }
-            }
 
-            Button {
-                text: "Remove Jobs"
-                visible: selectionMode
-                enabled: selectedIndexes.length > 0
-                onClicked: {
-                    const sorted = selectedIndexes.slice().sort((a, b) => b - a)
-                    for (let i = 0; i < sorted.length; ++i) {
-                        jobModel.removeJob(sorted[i])
-                    }
-                    selectedIndexes = []
-                }
-            }
+                Item { Layout.fillWidth: true }
 
-            Button {
-                text: "Save Jobs"
-                visible: selectionMode
-                enabled: selectedIndexes.length > 0
-                onClicked: {
-                    let jobName = jobModel.getJob(selectedIndexes[0]).name || "UntitledJob"
-                    jobName = jobName.replace(/[^a-zA-Z0-9_-]/g, "_")
-
-                    // Set the full path using a writable location
-                    const downloads = StandardPaths.writableLocation(StandardPaths.DownloadLocation)
-                    const fullPath = downloads + "/" + jobName + ".json"
-
-                    saveFileDialog.currentFile = fullPath
-                    saveFileDialog.open()
+                Button {
+                    text: "Printer Setup"
+                    onClicked: stackView.push("qrc:/PrinterSetupView.qml", {
+                        stackView: stackView,
+                        appState: appState
+                    })
                 }
             }
         }
 
+        // === Top Toolbar ===
+        Frame {
+            Layout.fillWidth: true
+            padding: 10
+            background: Rectangle { color: "#34495e" }
+
+            RowLayout {
+                spacing: 10
+                Layout.alignment: Qt.AlignHCenter
+
+                Button {
+                    text: selectionMode ? "Cancel Selection" : "Select Jobs"
+                    onClicked: {
+                        selectedIndexes = []
+                        selectionMode = !selectionMode
+                    }
+                }
+
+                Button {
+                    text: areAllJobsSelected() ? "Deselect All" : "Select All"
+                    visible: selectionMode
+                    onClicked: areAllJobsSelected() ? deselectAll() : selectAll()
+                }
+
+                Button {
+                    text: "Remove Jobs"
+                    visible: selectionMode
+                    enabled: selectedIndexes.length > 0
+                    onClicked: {
+                        const sorted = selectedIndexes.slice().sort((a, b) => b - a)
+                        for (let i = 0; i < sorted.length; ++i)
+                            jobModel.removeJob(sorted[i])
+                        selectedIndexes = []
+                    }
+                }
+
+                Button {
+                    text: "Save Jobs"
+                    visible: selectionMode
+                    enabled: selectedIndexes.length > 0
+                    onClicked: {
+                        let jobName = jobModel.getJob(selectedIndexes[0]).name || "UntitledJob"
+                        const downloads = StandardPaths.writableLocation(StandardPaths.DownloadLocation)
+                        const fullPath = downloads + "/" + jobName.replace(/[^a-zA-Z0-9_-]/g, "_") + ".json"
+                        saveFileDialog.currentFile = fullPath
+                        saveFileDialog.open()
+                    }
+                }
+            }
+        }
+
+        // === Selection Info ===
         Label {
             visible: selectionMode
             text: selectedIndexes.length + " job(s) selected"
             font.pixelSize: 14
-            color: "gray"
+            color: "#7f8c8d"
+            Layout.topMargin: 10
+            Layout.bottomMargin: 10
             horizontalAlignment: Text.AlignHCenter
-            Layout.alignment: Qt.AlignHCenter
+            Layout.fillWidth: true
         }
 
-        // Scrollable middle section (the job list)
+        // === Scrollable Job List ===
         ScrollView {
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.margins: 12
             clip: true
-            ScrollBar.vertical.policy: ScrollBar.AsNeeded
-            ScrollBar.vertical.interactive: true
 
             ListView {
                 id: jobListView
@@ -208,64 +238,61 @@ Item {
             }
         }
 
-        // Bottom toolbar
-        RowLayout {
-            Layout.alignment: Qt.AlignHCenter
-            spacing: 10
+        // === Bottom Toolbar ===
+        // === Bottom Toolbar ===
+        Rectangle {
+            Layout.fillWidth: true
+            height: 50
+            color: "#34495e"
 
-            Button {
-                text: "Add New Job"
-                onClicked: {
-                    jobModel.addJob("New Print Job")
+            RowLayout {
+                anchors.centerIn: parent
+                spacing: 20
+
+                Button {
+                    text: "Add New Job"
+                    onClicked: jobModel.addJob("New Print Job")
                 }
-            }
 
-            Button {
-                text: "Load Jobs"
-                onClicked: openFileDialog.open()
-            }
+                Button {
+                    text: "Load Jobs"
+                    onClicked: openFileDialog.open()
+                }
 
-            Button {
-                text: "Printer Setup"
-                ToolTip.text: "Configure a simulated or real printer"
-                ToolTip.visible: hovered
-                onClicked: {
-                    if (appState !== undefined) {
-                        stackView.push("qrc:/PrinterSetupView.qml", {
-                            stackView: stackView,
-                            appState: appState
-                        })
-                    } else {
-                        console.warn("appState is undefined!")
+                Button {
+                    text: "Print Job"
+                    enabled: selectedIndexes.length > 0
+                    onClicked: {
+                        appState.usingSimulatedPrinter
+                            ? outputFileDialog.open()
+                            : printSelectedJobDirectly()
                     }
+                    ToolTip.text: "Generate PRN file or print directly to the selected printer."
+                    ToolTip.visible: hovered
                 }
-            }
 
-            Button {
-                text: "Print Job"
-                enabled: selectedIndexes.length > 0
-                onClicked: {
-                    if (appState.usingSimulatedPrinter) {
-                        outputFileDialog.open()
-                    } else {
-                        printSelectedJobDirectly()
+                Button {
+                    text: "Nocai PRN"
+                    enabled: selectedIndexes.length > 0
+                    onClicked: {
+                        const job = jobModel.getJob(selectedIndexes[0])
+                        const outputPath = job.imagePath + "tempPRN"
+                        printJobNocaiOutput.generatePRN(job.imagePath, outputPath)
                     }
+                    ToolTip.text: "Generate PRN file specifically for Nocai Printers."
+                    ToolTip.visible: hovered
                 }
-                ToolTip.text: "Generate PRN file or print directly to the selected printer."
-                ToolTip.visible: hovered
             }
         }
 
-        // File Dialogs
+
+        // === File Dialogs ===
         FileDialog {
             id: openFileDialog
             title: "Load Jobs from JSON"
             nameFilters: ["JSON Files (*.json)"]
             fileMode: FileDialog.OpenFile
-            onAccepted: {
-                console.log("Opening file:", file)
-                jobModel.loadFromJson(file)
-            }
+            onAccepted: jobModel.loadFromJson(file)
         }
 
         FileDialog {
@@ -274,26 +301,18 @@ Item {
             nameFilters: ["JSON Files (*.json)"]
             fileMode: FileDialog.SaveFile
             defaultSuffix: "json"
-
-            onAccepted: {
-                console.log("Saving file:", file)
-                jobModel.saveToJson(file, selectedIndexes)
-            }
+            onAccepted: jobModel.saveToJson(file, selectedIndexes)
         }
 
         FileDialog {
             id: outputFileDialog
             title: "Select PRN File Destination"
-            fileMode: FileDialog.SaveFile
             nameFilters: ["PRN Files (*.prn)", "All Files (*)"]
-
+            fileMode: FileDialog.SaveFile
             onAccepted: {
                 const outputPath = file
-                const index = selectedIndexes[0]
-                const job = jobModel.getJob(index)
-                const inputFile = job.imagePath
-
-                const PRNsuccess = printJobOutput.generatePRNviaFilter(job, inputFile, outputPath)
+                const job = jobModel.getJob(selectedIndexes[0])
+                const PRNsuccess = printJobOutput.generatePRNviaFilter(job, job.imagePath, outputPath)
                 PRNsuccess
                     ? console.log("PRN generated at:", outputPath)
                     : console.warn("Failed to generate PRN for:", job.name)
