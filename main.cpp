@@ -5,7 +5,7 @@
 #include "PrintJobModel.h"
 #include "ImageLoader.h"
 #include "PrintJobOutput.h"
-#include "PrintJobNocaiOutput.h"
+#include "PrintJobNocai.h"
 #include "ImageEditor.h"
 #include "ColorProfile.h"
 
@@ -25,7 +25,7 @@ int main(int argc, char *argv[]) {
     ImageLoader imageLoader;
     ImageEditor imageEditor;
     PrintJobOutput printJobOutput;
-    PrintJobNocaiOutput printJobNocaiOutput;
+    PrintJobNocai printJobNocaiOutput;
     ColorProfile colorProfile;
 
     // Expose C++ objects to QML context
@@ -33,7 +33,7 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("imageLoader", &imageLoader);
     engine.rootContext()->setContextProperty("imageEditor", &imageEditor);
     engine.rootContext()->setContextProperty("printJobOutput", &printJobOutput);
-    engine.rootContext()->setContextProperty("printJobNocaiOutput", &printJobNocaiOutput);
+    engine.rootContext()->setContextProperty("printJobNocai", &printJobNocaiOutput);
     engine.rootContext()->setContextProperty("colorProfile", &colorProfile);
 
     // Load the main QML UI

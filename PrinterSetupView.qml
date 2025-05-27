@@ -10,6 +10,15 @@ Page {
 
     Component.onCompleted: printJobOutput.refreshDetectedPrinters()
 
+    property var nocaiPrinterCapabilities: {
+        "X-33": {
+            resolutions: ["720x720", "1440x1440"],
+            mediaSizes: ["A1", "A2", "A3", "A4", "A5", "A6", "Tabloid"],
+            duplexModes: ["None"],
+            colorModes: ["CMYK", "CMYKWW", "CMYKWV"]
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 20
@@ -26,13 +35,56 @@ Page {
         TabBar {
             id: printerTabs
             Layout.fillWidth: true
+            TabButton { text: "Nocai Printer" }
             TabButton { text: "Network Printer" }
-            TabButton { text: "Simulated Printer" }
         }
 
         StackLayout {
             currentIndex: printerTabs.currentIndex
             Layout.fillWidth: true
+
+            // === Nocai Printer Tab (Default) ===
+            Item {
+                ColumnLayout {
+                    spacing: 10
+                    Layout.fillWidth: true
+                    anchors.horizontalCenter: parent.horizontalCenter
+
+                    ComboBox {
+                        id: nocaiPrinterComboBox
+                        Layout.fillWidth: true
+                        model: ["X-33"]
+
+                        onActivated: {
+                            const selected = nocaiPrinterComboBox.currentText
+                            if (selected.length > 0) {
+                                appState.selectedPrinter = selected
+                                appState.usingSimulatedPrinter = true
+                                toast.show("Nocai printer selected: " + selected)
+                            }
+                        }
+                    }
+                    ColumnLayout {
+                        spacing: 10
+                        Layout.fillWidth: true
+                        anchors.horizontalCenter: parent.horizontalCenter
+
+                        Label {
+                            text: "The Nocai printer engine generates PRN files instead of printing directly to the Printer."
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                            Layout.maximumWidth: 400
+                        }
+
+                        Label {
+                            text: "This is intended for direct USB or offline transfer to a supported Nocai printer or software such as Atools."
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                            Layout.maximumWidth: 400
+                        }
+                    }
+                }
+            }
 
             // === Network Printer Tab ===
             Item {
@@ -71,73 +123,6 @@ Page {
                     }
                 }
             }
-
-            // === Simulated Printer Tab ===
-            Item {
-                ColumnLayout {
-                    spacing: 10
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    Layout.fillWidth: true
-
-                    TextField {
-                        id: simulatedNameField
-                        placeholderText: "Simulated printer name"
-                        text: appState.selectedPrinter
-                        Layout.fillWidth: true
-                    }
-
-                    RowLayout {
-                        spacing: 10
-                        Layout.fillWidth: true
-
-                        TextField {
-                            id: ppdPathField
-                            placeholderText: "No PPD file selected"
-                            text: appState.selectedPPD
-                            readOnly: true
-                            Layout.fillWidth: true
-                        }
-
-                        Button {
-                            text: "Browse..."
-                            onClicked: ppdDialog.open()
-                        }
-                    }
-
-                    Button {
-                        text: "Register Simulated Printer"
-                        enabled: simulatedNameField.text.length > 0 && ppdPathField.text.length > 0
-                        onClicked: {
-                            const name = simulatedNameField.text
-                            const file = ppdPathField.text
-
-                            const ppdOk = printJobOutput.loadPPDFile(file)
-                            const regOk = printJobOutput.registerPrinterFromPPD(name, file)
-                            const loadOk = printJobOutput.loadPrinter(name)
-
-                            if (ppdOk && regOk && loadOk) {
-                                appState.selectedPrinter = name
-                                appState.selectedPPD = file
-                                appState.usingSimulatedPrinter = true
-                                toast.show("Simulated printer loaded: " + name)
-                            } else {
-                                toast.show("Failed to simulate printer: " + name)
-                            }
-                        }
-                    }
-
-                    FileDialog {
-                        id: ppdDialog
-                        title: "Select a PPD file"
-                        nameFilters: ["PPD Files (*.ppd)"]
-                        fileMode: FileDialog.OpenFile
-                        onAccepted: {
-                            ppdPathField.text = file
-                            appState.selectedPPD = file
-                        }
-                    }
-                }
-            }
         }
 
         // === Printer Info (after setup) ===
@@ -149,14 +134,43 @@ Page {
             ColumnLayout {
                 spacing: 6
                 Layout.fillWidth: true
-                Label { text: "Name: " + appState.selectedPrinter }
-                Label { text: "Simulated: " + (appState.usingSimulatedPrinter ? "Yes" : "No") }
 
-                // Optional Capabilities List
-                Label { text: "Supported Resolutions: " + printJobOutput.supportedResolutions().join(", ") }
-                Label { text: "Media Sizes: " + printJobOutput.supportedMediaSizes().join(", ") }
-                Label { text: "Duplex Modes: " + printJobOutput.supportedDuplexModes().join(", ") }
-                Label { text: "Color Modes: " + printJobOutput.supportedColorModes().join(", ") }
+                Label { text: "Name: " + appState.selectedPrinter }
+                Label { text: "Nocai Printer: " + (appState.usingSimulatedPrinter ? "Yes" : "No") }
+
+                // Capabilities based on printer type
+                Label {
+                    Layout.preferredWidth: parent.width
+                    Layout.maximumWidth: 480
+                    text: "Supported Resolutions: " +
+                        (appState.usingSimulatedPrinter
+                         ? nocaiPrinterCapabilities[appState.selectedPrinter]?.resolutions?.join(", ")
+                         : printJobOutput.supportedResolutions().join(", "))
+                }
+                Label {
+                    Layout.preferredWidth: parent.width
+                    Layout.maximumWidth: 480
+                    text: "Media Sizes: " +
+                        (appState.usingSimulatedPrinter
+                         ? nocaiPrinterCapabilities[appState.selectedPrinter]?.mediaSizes?.join(", ")
+                         : printJobOutput.supportedMediaSizes().join(", "))
+                }
+                Label {
+                    Layout.preferredWidth: parent.width
+                    Layout.maximumWidth: 480
+                    text: "Duplex Modes: " +
+                        (appState.usingSimulatedPrinter
+                         ? nocaiPrinterCapabilities[appState.selectedPrinter]?.duplexModes?.join(", ")
+                         : printJobOutput.supportedDuplexModes().join(", "))
+                }
+                Label {
+                    Layout.preferredWidth: parent.width
+                    Layout.maximumWidth: 480
+                    text: "Color Modes: " +
+                        (appState.usingSimulatedPrinter
+                         ? nocaiPrinterCapabilities[appState.selectedPrinter]?.colorModes?.join(", ")
+                         : printJobOutput.supportedColorModes().join(", "))
+                }
             }
         }
 

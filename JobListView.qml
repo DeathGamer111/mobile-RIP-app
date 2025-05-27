@@ -270,18 +270,6 @@ Item {
                     ToolTip.text: "Generate PRN file or print directly to the selected printer."
                     ToolTip.visible: hovered
                 }
-
-                Button {
-                    text: "Nocai PRN"
-                    enabled: selectedIndexes.length > 0
-                    onClicked: {
-                        const job = jobModel.getJob(selectedIndexes[0])
-                        const outputPath = job.imagePath + "tempPRN"
-                        printJobNocaiOutput.generatePRN(job.imagePath, outputPath)
-                    }
-                    ToolTip.text: "Generate PRN file specifically for Nocai Printers."
-                    ToolTip.visible: hovered
-                }
             }
         }
 
@@ -312,10 +300,26 @@ Item {
             onAccepted: {
                 const outputPath = file
                 const job = jobModel.getJob(selectedIndexes[0])
-                const PRNsuccess = printJobOutput.generatePRNviaFilter(job, job.imagePath, outputPath)
-                PRNsuccess
-                    ? console.log("PRN generated at:", outputPath)
-                    : console.warn("Failed to generate PRN for:", job.name)
+
+                const loaded = printJobNocai.loadInputImage(job.imagePath)
+                const profiled = printJobNocai.applyICCConversion(
+                    "file:///home/mccalla/Documents/sRGBProfile.icm",
+                    "file:///home/mccalla/Documents/X-33_1440H_280.icc"
+                )
+                const halftoned = printJobNocai.generateFinalPRN(
+                    "file:///home/mccalla/Downloads/FreeBlueNoiseTextures/Data/256_256/LDR_LLL1_4.png",
+                    outputPath,
+                    720,
+                    720
+                )
+
+                if (loaded && profiled && halftoned) {
+                    console.log("PRN generated successfully:", outputPath)
+                    toast.show("PRN generated successfully.")
+                } else {
+                    console.warn("Failed to generate PRN for:", job.name)
+                    toast.show("Failed to generate PRN file.")
+                }
             }
         }
     }

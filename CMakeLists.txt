@@ -23,7 +23,7 @@ qt_add_executable(appRIPPrinterApp
     main.cpp
     PrintJobModel.h PrintJobModel.cpp
     PrintJobOutput.h PrintJobOutput.cpp
-    PrintJobNocaiOutput.h PrintJobNocaiOutput.cpp
+    PrintJobNocai.h PrintJobNocai.cpp
     ImageLoader.h ImageLoader.cpp
     ImageEditor.h ImageEditor.cpp
     ColorProfile.h ColorProfile.cpp
@@ -45,7 +45,7 @@ target_sources(appRIPPrinterApp PRIVATE
     ImageLoader.h
     ImageEditor.h
     PrintJobOutput.h
-    PrintJobNocaiOutput.h
+    PrintJobNocai.h
     ColorProfile.h
 )
 
