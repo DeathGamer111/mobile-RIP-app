@@ -1,8 +1,9 @@
 #include "ColorProfile.h"
+#include <Magick++.h>
 #include <QFile>
 #include <QUrl>
 #include <QDebug>
-#include <Magick++.h>
+#include <fstream>
 
 
 ColorProfile::ColorProfile(QObject *parent) : QObject(parent) {}
@@ -93,6 +94,55 @@ bool ColorProfile::convertWithICCProfiles(const QString &imagePath, const QStrin
 
     } catch (const Magick::Exception &e) {
         qWarning() << "ICC conversion failed:" << e.what();
+        return false;
+    }
+}
+
+
+bool ColorProfile::convertWithICCProfilesCMYK(const QString &imagePath, const QString &outputPath, const QString &inputICCPath, const QString &outputICCPath) {
+    try {
+        QString inLocal  = QUrl(imagePath).toLocalFile();
+        QString outLocal = QUrl(outputPath).toLocalFile();
+        QString inputICC = QUrl(inputICCPath).toLocalFile();
+        QString outputICC = QUrl(outputICCPath).toLocalFile();
+
+        // Load image
+        Magick::Image image(inLocal.toStdString());
+
+        // Strip existing profiles
+        image.profile("icc", Magick::Blob());
+
+        // Apply input ICC profile
+        std::ifstream inProfileFile(inputICC.toStdString(), std::ios::binary);
+        if (!inProfileFile) {
+            qWarning() << "❌ Failed to open input ICC profile:" << inputICC;
+            return false;
+        }
+        std::vector<char> inProfileData((std::istreambuf_iterator<char>(inProfileFile)), {});
+        image.profile("icc", Magick::Blob(inProfileData.data(), inProfileData.size()));
+
+        // Apply output ICC profile (this triggers conversion)
+        std::ifstream outProfileFile(outputICC.toStdString(), std::ios::binary);
+        if (!outProfileFile) {
+            qWarning() << "❌ Failed to open output ICC profile:" << outputICC;
+            return false;
+        }
+        std::vector<char> outProfileData((std::istreambuf_iterator<char>(outProfileFile)), {});
+        image.profile("icc", Magick::Blob(outProfileData.data(), outProfileData.size()));
+
+        // Set output format and color space
+        image.colorSpace(Magick::CMYKColorspace);
+        image.magick("TIFF");
+        image.depth(8);
+        image.defineValue("tiff:bits-per-sample", "8");
+
+        image.write(outLocal.toStdString());
+
+        qDebug() << "✅ ICC CMYK conversion succeeded. Output saved to:" << outLocal;
+        return true;
+
+    } catch (const Magick::Exception& e) {
+        qWarning() << "❌ ICC conversion failed:" << e.what();
         return false;
     }
 }

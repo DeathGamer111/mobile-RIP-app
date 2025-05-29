@@ -322,5 +322,10 @@ Item {
                 }
             }
         }
+
+        Toast {
+            id: toast
+            parent: Overlay.overlay
+        }
     }
 }
