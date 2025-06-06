@@ -35,6 +35,7 @@ qt_add_executable(appRIPPrinterApp
     ImpositionView.qml
     DraggableItem.qml
     Toast.qml
+    rip-app.desktop
 )
 
 

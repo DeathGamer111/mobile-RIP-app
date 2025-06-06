@@ -15,7 +15,7 @@ public:
     // QML-exposed pipeline
     Q_INVOKABLE bool loadInputImage(const QString& imagePath);
     Q_INVOKABLE bool applyICCConversion(const QString& inputProfile, const QString& outputProfile);
-    Q_INVOKABLE bool generateFinalPRN(const QString& maskPath, const QString& outputPath, int xdpi, int ydpi);
+    Q_INVOKABLE bool generateFinalPRN(const QString& outputPath, int xdpi, int ydpi);
 
 private:
 
@@ -33,7 +33,11 @@ private:
     std::unique_ptr<QTemporaryDir> tempDir;
 
     // Internal helpers
-    std::array<Magick::Image, 4> separateCMYK(const Magick::Image& cmyk);
+    //std::array<Magick::Image, 4> separateCMYK(const Magick::Image& cmyk);
+
+    std::array<Magick::Image, 4> separateCMYK(Magick::Image& cmyk);
+
+
     Magick::Image buildDitherMask(const Magick::Image& baseMask, int width, int height, int offsetX, int offsetY);
     uint8_t classifyDot(uint8_t imagePixel, uint8_t threshold);
     void apply4x4Promotion(std::vector<uint8_t>& dotMap, int width, int height);

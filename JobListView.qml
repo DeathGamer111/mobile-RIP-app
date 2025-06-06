@@ -307,7 +307,6 @@ Item {
                     "file:///home/mccalla/Documents/X-33_1440H_280.icc"
                 )
                 const halftoned = printJobNocai.generateFinalPRN(
-                    "file:///home/mccalla/Downloads/FreeBlueNoiseTextures/Data/256_256/LDR_LLL1_4.png",
                     outputPath,
                     720,
                     720
