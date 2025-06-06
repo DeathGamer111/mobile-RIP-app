@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=RIP App Demo
-Exec=appRIPPrinterApp
-Icon=icon
-Comment=High-precision RIP engine for print workflow demos
-Categories=Graphics;Printing;Utility;
-Terminal=false
