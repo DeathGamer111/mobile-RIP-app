@@ -37,7 +37,7 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("colorProfile", &colorProfile);
 
     // Load the main QML UI
-    engine.load(QUrl(QStringLiteral("qrc:/Main.qml")));
+    engine.load(QUrl(QStringLiteral("qrc:/qml/Main.qml")));
     if (engine.rootObjects().isEmpty())
         return -1;
 

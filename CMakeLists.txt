@@ -2,21 +2,21 @@ cmake_minimum_required(VERSION 3.16)
 
 project(RIPPrinterApp VERSION 0.1 LANGUAGES CXX)
 
-
 # QT Setup
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 REQUIRED COMPONENTS Quick)
-qt_standard_project_setup(REQUIRES 6.8)
 
+# qt_standard_project_setup(REQUIRES 6.8)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
 
 # ImageMagick Setup
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ImageMagick REQUIRED IMPORTED_TARGET Magick++)
 
-
 # Little CMS Setup
 pkg_check_modules(LCMS REQUIRED IMPORTED_TARGET lcms2)
-
 
 # Executable sources
 qt_add_executable(appRIPPrinterApp
@@ -28,16 +28,7 @@ qt_add_executable(appRIPPrinterApp
     ImageEditor.h ImageEditor.cpp
     ColorProfile.h ColorProfile.cpp
     stb_image.h
-    JobListView.qml
-    JobDetailsView.qml
-    ImageEditorView.qml
-    PrinterSetupView.qml
-    ImpositionView.qml
-    DraggableItem.qml
-    Toast.qml
-    rip-app.desktop
 )
-
 
 # Target C++ sources
 target_sources(appRIPPrinterApp PRIVATE
@@ -50,18 +41,20 @@ target_sources(appRIPPrinterApp PRIVATE
     ColorProfile.h
 )
 
+# Mark this as the default QML resource prefix
+set_target_properties(appRIPPrinterApp PROPERTIES QT_RESOURCE_PREFIX "/")
 
-# QML Resources
-qt_add_resources(appRIPPrinterApp "qml"
+qt_add_resources(appRIPPrinterApp
+    PREFIX "/"
     FILES
-        Main.qml
-        JobListView.qml
-        JobDetailsView.qml
-        ImageEditorView.qml
-        ImpositionView.qml
-        PrinterSetupView.qml
-        DraggableItem.qml
-        Toast.qml
+        qml/Main.qml
+        qml/JobListView.qml
+        qml/JobDetailsView.qml
+        qml/ImageEditorView.qml
+        qml/ImpositionView.qml
+        qml/PrinterSetupView.qml
+        qml/DraggableItem.qml
+        qml/Toast.qml
         assets/logo.png
 )
 
@@ -99,6 +92,8 @@ target_link_libraries(appRIPPrinterApp
     PRIVATE PkgConfig::ImageMagick
     PRIVATE PkgConfig::LCMS
 )
+
+qt6_import_qml_plugins(appRIPPrinterApp)
 
 
 include(GNUInstallDirs)
