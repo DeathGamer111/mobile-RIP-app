@@ -60,6 +60,10 @@ Page {
                             if (selected.length > 0) {
                                 appState.selectedPrinter = selected
                                 appState.usingSimulatedPrinter = true
+
+                                // Copy all necessary assets now
+                                printJobNocai.prepareNocaiAssets()
+
                                 toast.show("Nocai printer selected: " + selected)
                             }
                         }

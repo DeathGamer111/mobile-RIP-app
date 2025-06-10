@@ -301,26 +301,60 @@ Item {
                 const outputPath = file
                 const job = jobModel.getJob(selectedIndexes[0])
 
-                const loaded = printJobNocai.loadInputImage(job.imagePath)
-                const profiled = printJobNocai.applyICCConversion(
-                    "file:///home/mccalla/Documents/sRGBProfile.icm",
-                    "file:///home/mccalla/Documents/X-33_1440H_280.icc"
-                )
-                const halftoned = printJobNocai.generateFinalPRN(
-                    outputPath,
-                    720,
-                    720
-                )
+                appState.isGeneratingPRN = true
 
-                if (loaded && profiled && halftoned) {
-                    console.log("PRN generated successfully:", outputPath)
+                // Use threaded function implemented in C++
+                printJobNocai.runPRNGeneration(
+                    job.imagePath,
+                    outputPath,
+                    720, 720
+                )
+            }
+        }
+
+        Connections {
+            target: printJobNocai
+
+            onPrnGenerationFinished: function(success) {
+                appState.isGeneratingPRN = false
+                if (success) {
+                    console.log("PRN generated successfully:", outputFileDialog.file)
                     toast.show("PRN generated successfully.")
                 } else {
-                    console.warn("Failed to generate PRN for:", job.name)
+                    console.warn("Failed to generate PRN file.")
                     toast.show("Failed to generate PRN file.")
                 }
             }
         }
+
+        Item {
+            id: spinnerOverlay
+            anchors.fill: parent
+            visible: appState.isGeneratingPRN
+            z: 999
+
+            Rectangle {
+                anchors.fill: parent
+                color: "#00000088"
+
+                BusyIndicator {
+                    anchors.centerIn: parent
+                    running: true
+                    width: 64
+                    height: 64
+                }
+
+                Text {
+                    text: "Generating PRN..."
+                    anchors.top: parent.verticalCenter
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    color: "white"
+                    font.pixelSize: 18
+                    anchors.topMargin: 80
+                }
+            }
+        }
+
 
         Toast {
             id: toast

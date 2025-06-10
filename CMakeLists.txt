@@ -4,7 +4,7 @@ project(RIPPrinterApp VERSION 0.1 LANGUAGES CXX)
 
 # QT Setup
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-find_package(Qt6 REQUIRED COMPONENTS Quick)
+find_package(Qt6 REQUIRED COMPONENTS Quick Concurrent)
 
 # qt_standard_project_setup(REQUIRES 6.8)
 set(CMAKE_AUTOMOC ON)
@@ -56,6 +56,18 @@ qt_add_resources(appRIPPrinterApp
         qml/DraggableItem.qml
         qml/Toast.qml
         assets/logo.png
+        assets/blue_noise_mask_256/mask_c.tiff
+        assets/blue_noise_mask_256/mask_m.tiff
+        assets/blue_noise_mask_256/mask_y.tiff
+        assets/blue_noise_mask_256/mask_k.tiff
+        assets/blue_noise_mask_512/mask_c.tiff
+        assets/blue_noise_mask_512/mask_m.tiff
+        assets/blue_noise_mask_512/mask_y.tiff
+        assets/blue_noise_mask_512/mask_k.tiff
+        assets/RIP_App_Plain_Paper.icm
+        assets/sRGBProfile.icm
+        assets/magick
+        scripts/cmyk_dither_mask.sh
 )
 
 
@@ -88,12 +100,11 @@ set_target_properties(appRIPPrinterApp PROPERTIES
 
 target_link_libraries(appRIPPrinterApp
     PRIVATE Qt6::Quick
+    PRIVATE Qt6::Concurrent
     PRIVATE cups
     PRIVATE PkgConfig::ImageMagick
     PRIVATE PkgConfig::LCMS
 )
-
-qt6_import_qml_plugins(appRIPPrinterApp)
 
 
 include(GNUInstallDirs)

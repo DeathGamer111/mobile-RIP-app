@@ -14,6 +14,7 @@ ApplicationWindow {
         property string selectedPrinter: ""
         property string selectedPPD: ""
         property bool usingSimulatedPrinter: false
+        property bool isGeneratingPRN: false
     }
 
     StackView {
