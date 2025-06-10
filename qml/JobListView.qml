@@ -238,7 +238,35 @@ Item {
             }
         }
 
-        // === Bottom Toolbar ===
+        Item {
+            id: spinnerOverlay
+            anchors.fill: parent
+            visible: appState.isGeneratingPRN
+            z: 999
+
+            Rectangle {
+                anchors.fill: parent
+                color: "#00000088"
+
+                BusyIndicator {
+                    anchors.centerIn: parent
+                    running: true
+                    width: 64
+                    height: 64
+                }
+
+                Text {
+                    text: "Rastering Image and Generating PRN..."
+                    anchors.top: parent.verticalCenter
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    color: "white"
+                    font.pixelSize: 18
+                    anchors.topMargin: 80
+                }
+            }
+        }
+
+
         // === Bottom Toolbar ===
         Rectangle {
             Layout.fillWidth: true
@@ -326,35 +354,6 @@ Item {
                 }
             }
         }
-
-        Item {
-            id: spinnerOverlay
-            anchors.fill: parent
-            visible: appState.isGeneratingPRN
-            z: 999
-
-            Rectangle {
-                anchors.fill: parent
-                color: "#00000088"
-
-                BusyIndicator {
-                    anchors.centerIn: parent
-                    running: true
-                    width: 64
-                    height: 64
-                }
-
-                Text {
-                    text: "Generating PRN..."
-                    anchors.top: parent.verticalCenter
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    color: "white"
-                    font.pixelSize: 18
-                    anchors.topMargin: 80
-                }
-            }
-        }
-
 
         Toast {
             id: toast
