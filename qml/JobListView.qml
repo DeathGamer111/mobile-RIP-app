@@ -5,6 +5,7 @@ import QtQuick.Dialogs
 import Qt.labs.platform
 import QtCore
 
+
 Item {
     id: root
     required property StackView stackView
@@ -248,12 +249,35 @@ Item {
                 anchors.fill: parent
                 color: "#00000088"
 
-                BusyIndicator {
-                    anchors.centerIn: parent
-                    running: true
-                    width: 64
-                    height: 64
-                }
+		Item {
+		    width: 64
+		    height: 64
+		    anchors.centerIn: parent
+
+		    RotationAnimator on rotation {
+			from: 0
+			to: 360
+			duration: 1000
+			loops: Animation.Infinite
+			running: true
+		    }
+
+		    Rectangle {
+			anchors.fill: parent
+			radius: width / 2
+			border.width: 6
+			border.color: "#3498db"
+			color: "transparent"
+		    }
+
+		    Rectangle {
+			width: 6
+			height: height / 2
+			anchors.top: parent.top
+			anchors.horizontalCenter: parent.horizontalCenter
+			color: "#3498db"
+		    }
+		}
 
                 Text {
                     text: "Rastering Image and Generating PRN..."

@@ -66,8 +66,9 @@ for CHANNEL in c m y k; do
   MASK_TMP="${WORKDIR}/mask_${CHANNEL}.tiff"
   MASK_SRC="${MASKS[$CHANNEL]}"
 
-  WIDTH=$(identify -format "%w" "$INPUT")
-  HEIGHT=$(identify -format "%h" "$INPUT")
+  WIDTH=$("$MAGICK" identify -format "%w" "$INPUT")
+  HEIGHT=$("$MAGICK" identify -format "%h" "$INPUT")
+
   OFFSETX=${OFFSET_X[$CHANNEL]}
   OFFSETY=${OFFSET_Y[$CHANNEL]}
 
