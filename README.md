@@ -1,5 +1,7 @@
 # PrintFlow
 
+> Active Qt/QML raster image processing application for desktop print-job preparation and output generation.
+
 PrintFlow is a Qt 6 raster image processing application for preparing print jobs, previewing and editing artwork, managing printer settings, and generating raster/PRN output through pluggable vendor backends.
 
 The current codebase is focused on Linux desktop development with CMake, CUPS, ImageMagick, and Little CMS. Android APK support is available for emulator boot testing and physical-device packaging work.
