@@ -11,6 +11,8 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 
+#include <algorithm>
+
 
 /*********************************************************************************************
     PrintJobModel constructor, 
@@ -34,6 +36,7 @@ QVariant PrintJobModel::data(const QModelIndex &index, int role) const {
     case NameRole: return job.name;
     case ImagePathRole: return job.imagePath;
     case PaperSizeRole: return QVariant::fromValue(job.paperSize);
+    case MediaHeightMmRole: return job.mediaHeightMm;
     case ResolutionRole: return QVariant::fromValue(job.resolution);
     case OffsetRole: return QVariant::fromValue(job.offset);
     case WhiteStrategyRole: return job.whiteStrategy;
@@ -54,6 +57,7 @@ QHash<int, QByteArray> PrintJobModel::roleNames() const {
         {NameRole, "name"},
         {ImagePathRole, "imagePath"},
         {PaperSizeRole, "paperSize"},
+        {MediaHeightMmRole, "mediaHeightMm"},
         {ResolutionRole, "resolution"},
         {OffsetRole, "offset"},
         {WhiteStrategyRole, "whiteStrategy"},
@@ -73,6 +77,7 @@ PrintJob PrintJobModel::makeDefaultJob(const QString &name) const
     job.name = name;
     job.createdAt = QDateTime::currentDateTime();
     job.paperSize = QSize(210, 297);    // Default A4 Paper Size
+    job.mediaHeightMm = -1.0;           // Preserve the printer's current height until enabled.
     job.resolution = QSize(720, 1440);	// RIP default DPI.
     job.offset = QPoint(0, 0);
     job.whiteStrategy = "None";
@@ -143,6 +148,7 @@ QVariantMap PrintJobModel::getJob(int index) const {
     map["name"] = job.name;
     map["imagePath"] = job.imagePath;
     map["paperSize"] = QVariant::fromValue(job.paperSize);
+    map["mediaHeightMm"] = job.mediaHeightMm;
     map["resolution"] = QVariant::fromValue(job.resolution);
     map["offset"] = QVariant::fromValue(job.offset);
     map["whiteStrategy"] = job.whiteStrategy;
@@ -167,6 +173,8 @@ void PrintJobModel::updateJob(int index, const QVariantMap &jobData) {
     if (jobData.contains("imagePath"))     job.imagePath = jobData.value("imagePath").toString();
 
     if (jobData.contains("paperSize"))     job.paperSize = jobData.value("paperSize").toSize();
+    if (jobData.contains("mediaHeightMm"))
+        job.mediaHeightMm = std::clamp(jobData.value("mediaHeightMm").toDouble(), -1.0, 152.0);
     if (jobData.contains("resolution"))    job.resolution = jobData.value("resolution").toSize();
     if (jobData.contains("offset"))        job.offset = jobData.value("offset").toPoint();
 
@@ -303,6 +311,9 @@ void PrintJobModel::loadFromJson(const QString &filePath) {
         job.imagePath = obj["imagePath"].toString();  // May be overwritten below
 
         job.paperSize = QSize(obj["paperSizeWidth"].toInt(), obj["paperSizeHeight"].toInt());
+        job.mediaHeightMm = obj.contains("mediaHeightMm")
+            ? std::clamp(obj["mediaHeightMm"].toDouble(-1.0), -1.0, 152.0)
+            : -1.0;
         job.resolution = QSize(obj["resolutionWidth"].toInt(), obj["resolutionHeight"].toInt());
         job.offset.setX(obj["offsetX"].toInt());
         job.offset.setY(obj["offsetY"].toInt());
@@ -396,6 +407,7 @@ void PrintJobModel::saveToJson(const QString &filePath, const QList<int> &select
         obj["imagePath"] = job.imagePath;
         obj["paperSizeWidth"] = job.paperSize.width();
         obj["paperSizeHeight"] = job.paperSize.height();
+        obj["mediaHeightMm"] = job.mediaHeightMm;
         obj["resolutionWidth"] = job.resolution.width();
         obj["resolutionHeight"] = job.resolution.height();
         obj["offsetX"] = job.offset.x();

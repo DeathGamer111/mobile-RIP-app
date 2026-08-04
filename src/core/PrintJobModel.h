@@ -18,6 +18,7 @@ public:
         NameRole,
         ImagePathRole,
         PaperSizeRole,
+        MediaHeightMmRole,
         ResolutionRole,
         OffsetRole,
         WhiteStrategyRole,

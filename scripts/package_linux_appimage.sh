@@ -12,15 +12,24 @@ LINUXDEPLOYQT_URL="https://github.com/probonopd/linuxdeployqt/releases/download/
 
 echo "🔧 Checking and installing dependencies..."
 sudo apt-get update
-sudo apt-get install -y \
+
+# Ubuntu 24.04 renamed the FUSE 2 runtime package to libfuse2t64. Installing
+# the legacy `fuse` package removes fuse3, which in turn removes Ubuntu's
+# desktop/session packages and prevents GDM from starting.
+FUSE2_PACKAGE="libfuse2"
+if apt-cache show libfuse2t64 2>/dev/null | grep -q '^Package: libfuse2t64$'; then
+    FUSE2_PACKAGE="libfuse2t64"
+fi
+
+sudo apt-get install -y --no-remove \
     cmake g++ qt6-base-dev qt6-base-private-dev qt6-declarative-dev \
     qt6-declarative-dev-tools qt6-tools-dev qt6-tools-dev-tools \
     qt6-l10n-tools qml6-module-qtquick qml6-module-qtquick-controls \
     qml6-module-qtquick-layouts qml6-module-qt-labs-platform \
     qml6-module-qtquick-dialogs qt6-wayland pkg-config \
     liblcms2-dev libcups2-dev libmagick++-6.q16-dev libqt6quick6 \
-    wget git fuse patchelf desktop-file-utils libglib2.0-bin \
-    libfuse2 zsync xz-utils libgl1-mesa-dev libopengl-dev libvulkan-dev \
+    wget git patchelf desktop-file-utils libglib2.0-bin \
+    "${FUSE2_PACKAGE}" zsync xz-utils libgl1-mesa-dev libopengl-dev libvulkan-dev \
     qt6-declarative-dev-tools qt6-qmltooling-plugins \
     qml6-module-qtquick-dialogs libqt6widgets6 qml6-module-qtpositioning \
     qml6-module-qtcore qml6-module-qtquick-window qml-module-qtquick-shapes \
@@ -47,7 +56,7 @@ mkdir -p "${APPDIR}/usr/bin" \
          "${APPDIR}/usr/share/icons/hicolor/256x256/apps" \
          "${APPDIR}/usr/share/${APP_NAME}/assets"
 
-cp "${BUILD_DIR}/PrintFlow" "${APPDIR}/usr/bin/"
+cmake --install "${BUILD_DIR}" --prefix "${APPDIR}/usr"
 cp resources/packaging/linux/printflow.desktop "${APPDIR}/usr/share/applications/${APP_NAME}.desktop"
 
 if [[ -f "resources/assets/logo.png" ]]; then

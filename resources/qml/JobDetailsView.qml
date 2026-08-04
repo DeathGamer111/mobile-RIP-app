@@ -23,6 +23,7 @@ Item {
     property string printedSizeDisplay: "Printed size unavailable"
     property bool loadingInputICC: true
     property bool waitingForImageImport: false
+    property bool syncingOffsetControls: false
 
     width: parent ? parent.width : 450
     height: parent ? parent.height : 600
@@ -97,6 +98,7 @@ Item {
     onVisibleChanged: {
         if (visible) {
 			jobData = jobModel.getJob(jobIndex)
+	        syncOffsetControlsFromJob()
 	        whitePlatePath = jobData.whitePlatePath || ""
 	        varnishPlatePath = jobData.varnishPlatePath || ""
 	        refreshPreview()
@@ -312,8 +314,23 @@ Item {
 	}
 
 	
-    // Persist offset spinboxes to jobData.
+    // Refresh both controls as one logical operation. Assigning X triggers its
+    // valueChanged signal, so callbacks must be suspended until Y is restored.
+    function syncOffsetControlsFromJob() {
+        const savedOffset = jobData.offset || Qt.point(0, 0)
+        const savedX = savedOffset.x
+        const savedY = savedOffset.y
+        syncingOffsetControls = true
+        offsetXSpin.value = savedX
+        offsetYSpin.value = savedY
+        syncingOffsetControls = false
+        jobData.offset = Qt.point(savedX, savedY)
+    }
+
+    // Persist user-entered offset spinboxes to the local job data.
     function updateOffset() {
+        if (syncingOffsetControls)
+            return
         jobData.offset = Qt.point(offsetXSpin.value, offsetYSpin.value)
     }
 
@@ -361,7 +378,7 @@ Item {
 					ThemedButton {
 					    text: strings.trKey("common.back")
 					    theme: root.theme
-					    Layout.preferredWidth: 88
+					    Layout.preferredWidth: root.theme.headerButtonWidth(root.width)
 					    padding: 12
 					    font.pixelSize: 15
 					    onClicked: {
@@ -378,10 +395,13 @@ Item {
 				Label {
 				    text: strings.trKey("jobDetails.title")
 				    color: theme.text
-				    font.pixelSize: 20
+				    font.pixelSize: root.theme.headerTitleSize(root.width)
 				    font.weight: Font.Medium
 				    horizontalAlignment: Text.AlignHCenter
 				    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
 				    Layout.alignment: Qt.AlignVCenter
 				}
 
@@ -390,15 +410,16 @@ Item {
 					ThemedButton {
 					    text: strings.trKey("common.save")
 					    theme: root.theme
-					    Layout.preferredWidth: 88
+					    Layout.preferredWidth: root.theme.headerButtonWidth(root.width)
 					    padding: 12
 					    font.pixelSize: 15
 					    onClicked: {
 				        jobModel.updateJob(jobIndex, {
 				            name: jobNameField.text,
 				            imagePath: jobData.imagePath,
-				            paperSize: jobData.paperSize,
-				            resolution: (function() {
+			            paperSize: jobData.paperSize,
+			            mediaHeightMm: mediaHeightEnabled.checked ? mediaHeightSpin.value / 10.0 : -1,
+			            resolution: (function() {
 				                let parts = resolutionComboBox.currentText.split("x")
 				                return (parts.length === 2)
 				                    ? Qt.size(parseInt(parts[0]), parseInt(parts[1]))
@@ -436,6 +457,8 @@ Item {
 
 		ScrollBar.vertical.interactive: true
 		ScrollBar.vertical.policy: ScrollBar.AsNeeded
+        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+        contentWidth: availableWidth
 
 		// Wait until flickableItem is ready
 		Connections {
@@ -451,17 +474,16 @@ Item {
 
 	    // Card-like container for all job controls.
 		Column {
-			width: implicitWidth
-			Layout.alignment: Qt.AlignHCenter
+			width: scrollView.availableWidth
 			spacing: 0
 
 			Pane {
-			Layout.alignment: Qt.AlignHCenter
-			Layout.minimumWidth: 300
-			Layout.preferredWidth: 400
-			Layout.maximumWidth: 450
-			Layout.topMargin: 12
-			padding: 20
+			width: theme.boundedWidth(parent.width, 450)
+			anchors.horizontalCenter: parent.horizontalCenter
+			topPadding: 20
+			leftPadding: theme.panePadding
+			rightPadding: theme.panePadding
+			bottomPadding: 20
 
 			background: Rectangle {
 				color: theme.surface
@@ -472,9 +494,8 @@ Item {
 
                     ColumnLayout {
 			id: columnContent
+			width: parent.width
 			spacing: 16
-			Layout.fillWidth: true
-                        Layout.alignment: Qt.AlignHCenter
 
 			// Job name label
 			Label {
@@ -526,14 +547,17 @@ Item {
 			}
 
 			// Artwork actions: load, open editor, open imposition tool.
-            RowLayout {
-                spacing: 12
-                Layout.alignment: Qt.AlignHCenter
+            GridLayout {
+                columns: theme.gridColumns(width, 3, 118)
+                rowSpacing: 10
+                columnSpacing: 12
+                Layout.fillWidth: true
 
                 ThemedButton {
                     text: strings.trKey("jobDetails.uploadImage")
                     theme: root.theme
                     padding: 12
+                    Layout.fillWidth: true
 					font.pixelSize: 14	
                     onClicked: {
                         if (imageImportManager.supportsNativeImagePicker) {
@@ -550,6 +574,7 @@ Item {
                     enabled: imagePath !== ""
                     theme: root.theme
 					padding: 12
+                    Layout.fillWidth: true
 					font.pixelSize: 14
 	                    onClicked: {
 	                        stackView.push("qrc:/qml/ImageEditorView.qml", {
@@ -565,8 +590,15 @@ Item {
                     enabled: imagePath !== ""
                     theme: root.theme
                     padding: 12
-					font.pixelSize: 14
+                    Layout.fillWidth: true
+                    font.pixelSize: 14
                     onClicked: {
+							// Carry any current numeric offset into the same model field
+							// that Imposition edits, even before the full details form is saved.
+							jobModel.updateJob(jobIndex, {
+								offset: Qt.point(offsetXSpin.value, offsetYSpin.value)
+							})
+							jobData = jobModel.getJob(jobIndex)
 							stackView.push("qrc:/qml/ImpositionView.qml", {
 								"jobIndex": jobIndex,
 								"jobModel": jobModel,
@@ -608,14 +640,15 @@ Item {
                 Layout.fillWidth: true
 
                 ColumnLayout {
+                    width: parent.width
                     spacing: 10
-                    Layout.fillWidth: true
-                    Layout.alignment: Qt.AlignHCenter
 
                     Label { text: strings.trKey("jobDetails.paperSize") }
                     ComboBox {
                         id: paperSizeBox
                         Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                        Layout.maximumWidth: parent.width
                         model: ["A4", "Letter", "Tabloid", "Custom"]
                         currentIndex: paperSizeIndexFromSize(jobData.paperSize)
                         onCurrentTextChanged: updatePaperSize()
@@ -626,6 +659,7 @@ Item {
 				// Custom size widgets appear only when needed.
                 ColumnLayout {
                     visible: paperSizeBox.currentText === "Custom"
+                    Layout.fillWidth: true
                     spacing: 8
 
                     Label { text: strings.trKey("jobDetails.customPaperSize") }
@@ -658,22 +692,80 @@ Item {
 
 
 				Label { text: strings.trKey("jobDetails.outputDpi") }
-				RowLayout {
-					spacing: 8
+				ComboBox {
+					id: resolutionComboBox
 					Layout.fillWidth: true
+					Layout.minimumWidth: 0
+					Layout.maximumWidth: parent.width
+					model: dpiOptions
+					currentIndex: -1
 
-					ComboBox {
-						id: resolutionComboBox
-						Layout.fillWidth: true
-						model: dpiOptions
-						currentIndex: -1
-
-						onCurrentIndexChanged: {
-							updateResolution()
-							updatePrintedSize()
-						}
-				    }
+					onCurrentIndexChanged: {
+						updateResolution()
+						updatePrintedSize()
+					}
 				}
+
+                CheckBox {
+                    id: mediaHeightEnabled
+                    text: strings.trKey("jobDetails.mediaHeight.enable")
+                    checked: jobData.mediaHeightMm !== undefined && jobData.mediaHeightMm >= 0
+                    onToggled: jobData.mediaHeightMm = checked ? mediaHeightSpin.value / 10.0 : -1
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    enabled: mediaHeightEnabled.checked
+
+                    Label { text: strings.trKey("jobDetails.mediaHeight") }
+                    SpinBox {
+                        id: mediaHeightSpin
+                        Layout.fillWidth: true
+                        from: 0
+                        to: 1520
+                        stepSize: 1
+                        editable: true
+                        value: jobData.mediaHeightMm !== undefined && jobData.mediaHeightMm >= 0
+                               ? Math.round(jobData.mediaHeightMm * 10) : 0
+                        textFromValue: function(value, locale) {
+                            return Number(value / 10.0).toLocaleString(locale, 'f', 1)
+                        }
+                        valueFromText: function(text, locale) {
+                            return Math.round(Number.fromLocaleString(locale, text) * 10.0)
+                        }
+                        validator: DoubleValidator {
+                            bottom: 0.0
+                            top: 152.0
+                            decimals: 1
+                            notation: DoubleValidator.StandardNotation
+                        }
+                        contentItem: TextInput {
+                            z: 2
+                            text: mediaHeightSpin.displayText
+                            color: theme.text
+                            selectionColor: theme.accent
+                            selectedTextColor: theme.bg
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            selectByMouse: true
+                            validator: mediaHeightSpin.validator
+                            inputMethodHints: Qt.ImhFormattedNumbersOnly
+                        }
+                        onValueModified: {
+                            if (mediaHeightEnabled.checked)
+                                jobData.mediaHeightMm = value / 10.0
+                        }
+                    }
+                }
+
+                Label {
+                    text: strings.trKey("jobDetails.mediaHeight.help")
+                    visible: mediaHeightEnabled.checked
+                    font.italic: true
+                    font.pointSize: 10
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
 								
 				// Calculated printed size hint for the user.
 				Label {
@@ -716,6 +808,8 @@ Item {
 				ComboBox {
 					id: whiteBox
 					Layout.fillWidth: true
+					Layout.minimumWidth: 0
+					Layout.maximumWidth: parent.width
 					model: ["Off", "Auto Underbase", "Flood", "Plate"]
 					currentIndex: Math.max(0, model.indexOf(jobData.whiteStrategy))
 					onCurrentTextChanged: updateWhiteStrategy()
@@ -737,6 +831,7 @@ Item {
 
 						TextField {
 							Layout.fillWidth: true
+                            Layout.minimumWidth: 0
 							text: whitePlatePath
 							readOnly: true
 							placeholderText: strings.trKey("jobDetails.whitePlate.placeholder")
@@ -773,6 +868,8 @@ Item {
 				ComboBox {
 					id: varnishBox
 					Layout.fillWidth: true
+					Layout.minimumWidth: 0
+					Layout.maximumWidth: parent.width
 					model: ["Off", "Over Printed Area", "Flood", "Plate"]
 					currentIndex: Math.max(0, model.indexOf(jobData.varnishType))
 					onCurrentTextChanged: updateVarnishType()
@@ -794,6 +891,7 @@ Item {
 
 						TextField {
 							Layout.fillWidth: true
+                            Layout.minimumWidth: 0
 							text: varnishPlatePath
 							readOnly: true
 							placeholderText: strings.trKey("jobDetails.varnishPlate.placeholder")
@@ -831,6 +929,8 @@ Item {
                 ComboBox {
                     id: profileBox
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: parent.width
                     model: ["sRGB", "AdobeRGB", "CMYK", "Lc+Lm+Ly+Lk", "Grayscale", "Indexed8", "Indexed16", "Custom ICC"]
                     currentIndex: model.indexOf(jobData.colorProfile)
                     enabled: appState.selectedPrinter.length === 0 || isSupported(currentText, printJobOutput.supportedColorModes())
@@ -842,6 +942,7 @@ Item {
                     Layout.fillWidth: true
 
                     ThemedButton {
+                        Layout.fillWidth: true
 						visible: profileBox.currentText === "Custom ICC"
 						text: strings.trKey("jobDetails.loadInputIcc")
 						theme: root.theme
@@ -849,6 +950,7 @@ Item {
 				    }
 
 				    ThemedButton {
+                        Layout.fillWidth: true
 						visible: profileBox.currentText === "Custom ICC"
 						text: strings.trKey("jobDetails.loadOutputIcc")
 						theme: root.theme
@@ -857,6 +959,7 @@ Item {
 
 				    ThemedButton {
 						id: convertButton
+                        Layout.fillWidth: true
 						text: strings.trKey("jobDetails.convertColorspace")
 						theme: root.theme
 						visible: profileBox.currentText !== jobData.colorProfile
@@ -930,6 +1033,7 @@ Item {
                             visible: Object.keys(imageMeta).length > 0
 
                             Column {
+                                width: parent.width
                                 spacing: 4
 
                                 // Always shown if present

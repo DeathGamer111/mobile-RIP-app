@@ -33,6 +33,7 @@ class NocaiPrnWriterTest : public QObject
 private slots:
     void packs2BppRows();
     void writesStandardCmykPrn();
+    void writesStandardX33WhitePrn();
     void writesMultiInkPrn();
 };
 
@@ -76,10 +77,64 @@ void NocaiPrnWriterTest::writesStandardCmykPrn()
     QCOMPARE(readU32(standardData, 0), 0x00005555u);
     QCOMPARE(readU32(standardData, 4), 720u);
     QCOMPARE(readU32(standardData, 8), 720u);
+    QCOMPARE(readU32(standardData, 12), 4u);
+    QCOMPARE(readU32(standardData, 16), 1u);
+    QCOMPARE(readU32(standardData, 20), 4u);
+    QCOMPARE(readU32(standardData, 24), 0u);
+    QCOMPARE(readU32(standardData, 28), 4u);
+    QCOMPARE(readU32(standardData, 32), 1u);
+    QCOMPARE(readU32(standardData, 36), 1u);
+    QCOMPARE(readU32(standardData, 40), 0u);
+    QCOMPARE(readU32(standardData, 44), 0u);
     QCOMPARE(static_cast<unsigned char>(standardData[48]), 3);
     QCOMPARE(static_cast<unsigned char>(standardData[52]), 2);
     QCOMPARE(static_cast<unsigned char>(standardData[56]), 1);
     QCOMPARE(static_cast<unsigned char>(standardData[60]), 4);
+}
+
+void NocaiPrnWriterTest::writesStandardX33WhitePrn()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    // Five logical rasters are supplied. The X-33 physical order references
+    // logical W twice so the serialized row is YMCKWW.
+    std::vector<std::vector<std::vector<uint8_t>>> channels(5);
+    for (int channel = 0; channel < 5; ++channel) {
+        channels[channel] = {
+            std::vector<uint8_t>(4, static_cast<uint8_t>(channel + 1))
+        };
+    }
+    const std::vector<int> channelOrder = {2, 1, 0, 3, 4, 4};
+
+    const QString path = tempDir.filePath(QStringLiteral("x33-white.prn"));
+    QVERIFY(NocaiPrnWriter::writeStandardX33Prn(
+        channels,
+        channelOrder,
+        4,
+        1,
+        720,
+        1440,
+        QUrl::fromLocalFile(path).toString()));
+
+    QByteArray data;
+    QVERIFY(readFile(path, data));
+    QCOMPARE(data.size(), 72);
+    QCOMPARE(readU32(data, 0), 0x00005555u);
+    QCOMPARE(readU32(data, 4), 720u);
+    QCOMPARE(readU32(data, 8), 1440u);
+    QCOMPARE(readU32(data, 12), 4u);
+    QCOMPARE(readU32(data, 16), 1u);
+    QCOMPARE(readU32(data, 20), 4u);
+    QCOMPARE(readU32(data, 28), 6u);
+    QCOMPARE(readU32(data, 32), 1u);
+    QCOMPARE(readU32(data, 36), 1u);
+    QCOMPARE(static_cast<unsigned char>(data[48]), 3); // Y
+    QCOMPARE(static_cast<unsigned char>(data[52]), 2); // M
+    QCOMPARE(static_cast<unsigned char>(data[56]), 1); // C
+    QCOMPARE(static_cast<unsigned char>(data[60]), 4); // K
+    QCOMPARE(static_cast<unsigned char>(data[64]), 5); // W
+    QCOMPARE(static_cast<unsigned char>(data[68]), 5); // W
 }
 
 void NocaiPrnWriterTest::writesMultiInkPrn()

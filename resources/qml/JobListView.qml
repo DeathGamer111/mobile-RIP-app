@@ -185,9 +185,15 @@ Item {
     }
 
 
-    function printSelectedMultiInkDirectly() {
+    function printSelectedSdkJobDirectly() {
         if (!appState.supportsDirectPrint || !appState.supportsRipProcessing) {
             toast.show(strings.trKey("jobs.toast.directUnavailable"))
+            return
+        }
+        appState.configureDirectPrintSdk()
+        if (!nocaiDirectPrint.available) {
+            const sdkError = nocaiDirectPrint.lastError
+            toast.show(sdkError.length > 0 ? sdkError : strings.trKey("jobs.toast.directUnavailable"))
             return
         }
 
@@ -196,8 +202,13 @@ Item {
         directJob.inkMode = appState.multiInkInkMode
         directJob.directPrintSettings = directPrintSettings()
         appState.isGeneratingPRN = true
-        console.log("Routing to Nocai MultiInk direct print backend with inkMode =", appState.multiInkInkMode)
-        printJobMultiInk.runDirectPrint(directJob)
+        if (appState.usingMultiInkPrinter) {
+            console.log("Routing to the newer-model MultiInk SDK backend with inkMode =", appState.multiInkInkMode)
+            printJobMultiInk.runDirectPrint(directJob)
+        } else {
+            console.log("Routing X-33 to the legacy SDK through the standard CMYK backend")
+            printJobCMYK.runDirectPrint(directJob)
+        }
     }
 
 
@@ -231,7 +242,7 @@ Item {
 		appState.isGeneratingPRN = false
 
 		if (success) {
-            if (appState.usingMultiInkPrinter && appState.multiInkOutputMode === "direct") {
+            if (appState.usingSimulatedPrinter && appState.multiInkOutputMode === "direct") {
                 console.log("Direct print sent successfully.")
                 toast.show(strings.trKey("jobs.toast.sentToPrinter"))
             } else {
@@ -239,7 +250,7 @@ Item {
                 toast.show(strings.trKey("jobs.toast.prnGenerated"))
             }
 		} else {
-            if (appState.usingMultiInkPrinter && appState.multiInkOutputMode === "direct") {
+            if (appState.usingSimulatedPrinter && appState.multiInkOutputMode === "direct") {
                 console.warn("Failed to send direct print job.")
                 toast.show(strings.trKey("jobs.toast.sendFailed"))
             } else {
@@ -269,7 +280,7 @@ Item {
 				spacing: 10
 
 					Item {
-						Layout.preferredWidth: 132
+						Layout.preferredWidth: root.width < 380 ? 64 : 132
 						Layout.fillHeight: true
 
 						Image {
@@ -285,7 +296,7 @@ Item {
 
 	                Label {
 						text: strings.trKey("jobs.title")
-						font.pixelSize: 22
+						font.pixelSize: root.width < 380 ? 18 : 22
 						color: theme.text
 						horizontalAlignment: Text.AlignHCenter
 						verticalAlignment: Text.AlignVCenter
@@ -294,7 +305,7 @@ Item {
 					}
 
 					Item {
-						Layout.preferredWidth: 132
+						Layout.preferredWidth: root.width < 380 ? 80 : 132
 						Layout.fillHeight: true
 
 						C.ToolButton {
@@ -302,7 +313,7 @@ Item {
 							text: strings.trKey("jobs.settings")
 							anchors.right: parent.right
 							anchors.verticalCenter: parent.verticalCenter
-							width: 112
+							width: root.width < 380 ? 76 : 112
 							height: 36
 							hoverEnabled: true
 							padding: 10
@@ -331,7 +342,8 @@ Item {
 								const p = settingsBtn.mapToItem(host, 0, settingsBtn.height)
 
 								settingsMenu.parent = host
-								settingsMenu.x = Math.max(8, p.x + settingsBtn.width - settingsMenu.implicitWidth)
+								settingsMenu.x = Math.min(Math.max(8, p.x + settingsBtn.width - settingsMenu.implicitWidth),
+                                                         Math.max(8, host.width - settingsMenu.implicitWidth - 8))
 								settingsMenu.y = p.y + 6
 								settingsMenu.open()
 							}
@@ -545,7 +557,7 @@ Item {
                     parent: Overlay.overlay
                     modal: true
                     focus: true
-                    width: Math.min(root.width - 32, 360)
+                    width: Math.min(Math.max(root.width - 32, 240), 360)
                     x: Math.round((root.width - width) / 2)
                     y: Math.round((root.height - height) / 2)
                     padding: 18
@@ -642,6 +654,7 @@ Item {
         // Toolbar controlling selection lifecycle and save/remove actions.
         Frame {
             Layout.fillWidth: true
+            Layout.preferredHeight: selectionMode && root.width < 430 ? 118 : 62
             padding: 10
 			background: Rectangle { color: theme.surface2 }
 
@@ -650,22 +663,20 @@ Item {
 				anchors.leftMargin: 8
 				anchors.rightMargin: 8
 				spacing: 10
+                visible: !selectionMode
 
-                
                 ThemedButton {
 					text: strings.trKey("jobs.new")
-					visible: !selectionMode
 					theme: root.theme
 					padding: 12
 					font.pixelSize: 15
 					onClicked: jobModel.addJob("New Print Job")
 				}
 				
-		        Item { Layout.fillWidth: true; visible: !selectionMode }
+		        Item { Layout.fillWidth: true }
 
 				ThemedButton {
 					text: strings.trKey("jobs.select")
-					visible: !selectionMode
 					theme: root.theme
 					padding: 12
 					font.pixelSize: 15
@@ -674,11 +685,24 @@ Item {
 						selectionMode = true
 					}
 				}
+            }
 
-				// Selection mode (Cancel + actions)
+            GridLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+                visible: selectionMode
+                columns: root.theme.gridColumns(width, 4, 104)
+                columnSpacing: 8
+                rowSpacing: 8
+
+                readonly property int actionButtonWidth: Math.floor((width - (columns - 1) * columnSpacing) / columns)
+
 				ThemedButton {
+					Layout.preferredWidth: parent.actionButtonWidth
+                    Layout.minimumWidth: 0
+                    Layout.preferredHeight: 42
 					text: strings.trKey("jobs.cancelSelection")
-					visible: selectionMode
 					theme: root.theme
 					onClicked: {
 						selectedIndexes = []
@@ -687,24 +711,29 @@ Item {
 				}
 
 				ThemedButton {
+					Layout.preferredWidth: parent.actionButtonWidth
+                    Layout.minimumWidth: 0
+                    Layout.preferredHeight: 42
 					text: areAllJobsSelected() ? strings.trKey("jobs.deselectAll") : strings.trKey("jobs.selectAll")
-					visible: selectionMode
 					theme: root.theme
 					onClicked: areAllJobsSelected() ? deselectAll() : selectAll()
 				}
 
 				ThemedButton {
+					Layout.preferredWidth: parent.actionButtonWidth
+                    Layout.minimumWidth: 0
+                    Layout.preferredHeight: 42
 					text: strings.trKey("jobs.remove")
-					visible: selectionMode
 					enabled: selectedIndexes.length > 0
 					theme: root.theme
 					onClicked: removeJobsDialog.open()
 				}
 
-				// Save selected jobs to JSON (with embedded base64 image data).
                 ThemedButton {
+                    Layout.preferredWidth: parent.actionButtonWidth
+                    Layout.minimumWidth: 0
+                    Layout.preferredHeight: 42
                     text: strings.trKey("jobs.save")
-                    visible: selectionMode
                     enabled: selectedIndexes.length > 0
        				theme: root.theme
                     onClicked: {
@@ -741,10 +770,12 @@ Item {
             
             ScrollBar.vertical.policy: ScrollBar.AlwaysOff
             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            contentWidth: availableWidth
 
             ListView {
                 id: jobListView
-                width: Math.min(parent.width, 500)
+                width: parent.width
+                clip: true
                 model: jobModel
                 spacing: 6
                 Layout.alignment: Qt.AlignHCenter
@@ -832,8 +863,10 @@ Item {
 						outputFileDialog.currentFile = fullPath
 
                         if (appState.usingSimulatedPrinter) {
-                            if (appState.usingMultiInkPrinter && appState.multiInkOutputMode === "direct")
-                                printSelectedMultiInkDirectly()
+                            if (appState.multiInkOutputMode === "direct"
+                                    && (appState.selectedPrinter === "X-33"
+                                        || appState.selectedPrinter === "X-36NC (Photo Printer)"))
+                                printSelectedSdkJobDirectly()
                             else
                                 outputFileDialog.open()
                         } else {
@@ -868,7 +901,7 @@ Item {
             focus: true
             closePolicy: C.Popup.CloseOnEscape | C.Popup.CloseOnPressOutside
             anchors.centerIn: parent
-            width: Math.min(parent.width - 48, 360)
+            width: Math.min(Math.max(parent.width - 48, 240), 360)
             title: strings.trKey("jobs.removeConfirm.title")
 
             background: Rectangle {

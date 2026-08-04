@@ -8,6 +8,7 @@
 #include <cstdint>
 
 class ColorManagementManager;
+class IPrintOutputClient;
 
 class PrintJobCMYK : public QObject
 {
@@ -20,8 +21,10 @@ public:
     explicit PrintJobCMYK(QObject* parent = nullptr);
 
     void setColorManager(ColorManagementManager* mgr);
+    void setDirectPrintClient(IPrintOutputClient* client);
 
     Q_INVOKABLE void runPRNGeneration(const QVariantMap& jobMap, const QString& outputPath);
+    Q_INVOKABLE void runDirectPrint(const QVariantMap& jobMap);
     Q_INVOKABLE bool loadInputImage(const QString& imagePath);
     Q_INVOKABLE bool applyICCConversion(const QString& inputProfile, const QString& outputProfile);
     Q_INVOKABLE bool generateFinalPRN(const QString& outputPath, int xdpi, int ydpi);

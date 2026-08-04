@@ -38,7 +38,9 @@ Run local tests with:
 scripts/run_tests.sh
 ```
 
-Android builds use Qt's Android `qt-cmake` wrapper and the `apk` target through `scripts/dev_build_android.sh`. The x86_64 emulator build uses Android-safe facades and does not require a direct-print SDK. Physical-device arm64-v8a builds can package a local vendor direct-print SDK when `DIRECT_PRINT_SDK_ROOT` points to an ignored local SDK drop.
+Android builds use Qt's Android `qt-cmake` wrapper and the `apk` target through `scripts/dev_build_android.sh`. The x86_64 emulator build uses Android-safe facades and does not require a direct-print SDK. Android direct-print packaging requires a target-ABI Android API library in the supplied SDK; Linux ARM64 libraries are not treated as Android libraries. Use `./Dev_Build_App.sh --android` for emulator testing and `./Dev_Build_App.sh --android-device` for USB device testing.
+
+Linux SDK drops can be supplied through `DIRECT_PRINT_SDK_ROOT` or `DIRECT_PRINT_SDK_ARCHIVE`. CMake chooses and validates binaries against the target architecture, extracts archives into the build tree, and stages the API plus its required printer-socket subtree beside the executable.
 
 ## Files
 

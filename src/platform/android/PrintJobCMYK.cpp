@@ -21,11 +21,23 @@ void PrintJobCMYK::setColorManager(ColorManagementManager* mgr)
     m_colorManager = mgr;
 }
 
+void PrintJobCMYK::setDirectPrintClient(IPrintOutputClient* client)
+{
+    Q_UNUSED(client)
+}
+
 void PrintJobCMYK::runPRNGeneration(const QVariantMap& jobMap, const QString& outputPath)
 {
     Q_UNUSED(jobMap)
     Q_UNUSED(outputPath)
     unavailable("CMYK PRN generation");
+    emit prnGenerationFinished(false);
+}
+
+void PrintJobCMYK::runDirectPrint(const QVariantMap& jobMap)
+{
+    Q_UNUSED(jobMap)
+    unavailable("CMYK direct print");
     emit prnGenerationFinished(false);
 }
 

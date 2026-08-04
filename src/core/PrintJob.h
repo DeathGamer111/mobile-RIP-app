@@ -15,6 +15,7 @@ struct PrintJob {
     QString imagePath;          // Path to the input image
 
     QSize paperSize;            // Paper size in pixels (or user-defined)
+    double mediaHeightMm = -1.0; // Optional, in 0.1 mm increments; -1 keeps current height
     QSize resolution;           // Output resolution (DPI)
     QPoint offset;              // Position offset on page
 
@@ -27,4 +28,3 @@ struct PrintJob {
     QString whitePlatePath;	// optional grayscale raster plate for White Plate mode
     QString varnishPlatePath;	// optional grayscale raster plate for Varnish Plate mode
 };
-

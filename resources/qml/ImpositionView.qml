@@ -90,8 +90,8 @@ Page {
 
     function doSave() {
         let newOffset = Qt.point(
-            Math.round(imageWrapper.itemX),
-            Math.round(imageWrapper.itemY)
+            Math.round(Math.max(0, imageWrapper.itemX)),
+            Math.round(Math.max(0, imageWrapper.itemY))
         )
 
         if (hasDrawnElements) {
@@ -140,7 +140,7 @@ Page {
             ThemedButton {
                 text: strings.trKey("common.back")
                 theme: impositionView.theme
-                Layout.preferredWidth: 88
+                Layout.preferredWidth: impositionView.theme.headerButtonWidth(impositionView.width)
                 padding: 12
                 font.pixelSize: 15
                 onClicked: impositionView.doBack()
@@ -151,9 +151,12 @@ Page {
             Label {
                 text: strings.trKey("imposition.title")
                 color: theme.text
-                font.pixelSize: 20
+                font.pixelSize: impositionView.theme.headerTitleSize(impositionView.width)
                 font.weight: Font.Medium
                 horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 Layout.alignment: Qt.AlignVCenter
             }
 
@@ -162,7 +165,7 @@ Page {
             ThemedButton {
                 text: strings.trKey("common.save")
                 theme: impositionView.theme
-                Layout.preferredWidth: 88
+                Layout.preferredWidth: impositionView.theme.headerButtonWidth(impositionView.width)
                 padding: 12
                 font.pixelSize: 15
                 enabled: jobData().imagePath && jobData().imagePath.length > 0
@@ -178,7 +181,7 @@ Page {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.margins: 12
+        anchors.margins: theme.pageMargin
         contentWidth: availableWidth
         clip: true
 
@@ -203,7 +206,7 @@ Page {
 
                 ColumnLayout {
 					anchors.horizontalCenter: parent.horizontalCenter
-					width: Math.min(parent.width, impositionView.cardWidthWide)
+					width: theme.boundedWidth(parent.width, impositionView.cardWidthWide)
 					spacing: 10
 
                     // Fixed viewport box (like ImageEditor preview card)
@@ -357,11 +360,11 @@ Page {
 						Layout.alignment: Qt.AlignHCenter
 						columnSpacing: 10
 						rowSpacing: 10
-						columns: 3
+						columns: zoomGrid.width < 280 ? 1 : 3
 
 						// Uniform sizing
 						readonly property int btnH: 40
-						readonly property int btnW: 140
+						readonly property int btnW: columns === 1 ? parent.width : Math.max(72, Math.floor((parent.width - 72 - (columns - 1) * columnSpacing) / 2))
 
 						ThemedButton {
 							text: strings.trKey("imposition.zoomOut")
@@ -378,7 +381,7 @@ Page {
 							horizontalAlignment: Text.AlignHCenter
 							verticalAlignment: Text.AlignVCenter
 							Layout.alignment: Qt.AlignVCenter
-							Layout.preferredWidth: 80
+							Layout.preferredWidth: zoomGrid.columns === 1 ? zoomGrid.parent.width : 72
 						}
 
 						ThemedButton {
@@ -397,7 +400,7 @@ Page {
             // =========================
             Pane {
                 Layout.fillWidth: true
-                padding: 16
+                padding: theme.panePadding
 
                 background: Rectangle {
                     color: theme.surface
@@ -408,7 +411,7 @@ Page {
 
                 ColumnLayout {
 					anchors.horizontalCenter: parent.horizontalCenter
-					width: Math.min(parent.width, impositionView.cardWidthMedium)
+					width: theme.boundedWidth(parent.width, impositionView.cardWidthMedium)
 					spacing: 12
 
                     Label {
@@ -441,6 +444,7 @@ Page {
 								id: textOverlayField
 								placeholderText: strings.trKey("imposition.text.placeholder")
 								Layout.fillWidth: true
+                                Layout.minimumWidth: 0
 							}
 						}
 
@@ -453,7 +457,7 @@ Page {
 								text: strings.trKey("imposition.drawText")
 								theme: impositionView.theme
 								Layout.preferredHeight: 40
-								Layout.preferredWidth: 160
+								Layout.preferredWidth: Math.min(parent.width, 160)
 								onClicked: {
 									textOverlayWrapper.visible = true
 									apply("text", {
@@ -474,14 +478,16 @@ Page {
 						}
 
 						// --- Rect tool: W/H controls row, then button row ---
-						RowLayout {
+						GridLayout {
 							Layout.fillWidth: true
-							spacing: 10
+							columns: theme.gridColumns(width, 4, 96)
+							columnSpacing: 10
+                            rowSpacing: 10
 
 							Label {
 								text: strings.trKey("imposition.width")
 								color: theme.text
-								Layout.preferredWidth: 60
+								Layout.preferredWidth: theme.formLabelWidth(parent.width, 60)
 							}
 
 							SpinBox {
@@ -493,7 +499,7 @@ Page {
 							Label {
 								text: strings.trKey("imposition.height")
 								color: theme.text
-								Layout.preferredWidth: 60
+								Layout.preferredWidth: theme.formLabelWidth(parent.width, 60)
 							}
 
 							SpinBox {
@@ -511,7 +517,7 @@ Page {
 								text: strings.trKey("imposition.drawRect")
 								theme: impositionView.theme
 								Layout.preferredHeight: 40
-								Layout.preferredWidth: 160
+								Layout.preferredWidth: Math.min(parent.width, 160)
 								onClicked: {
 									rectOverlayWrapper.visible = true
 									rectOverlayWrapper.width = rectWidthField.value

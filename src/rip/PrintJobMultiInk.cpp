@@ -1352,6 +1352,11 @@ DirectPrintSettings PrintJobMultiInk::directPrintSettingsFromJob(const QVariantM
     out.carReset = value("carReset", 1);
     out.stripBlank = value("stripBlank", 1);
     out.blankDistance = value("blankDistance", 0);
+    const QPoint printOffset = jobMap.value("offset", QPoint(0, 0)).toPoint();
+    out.printOffsetXmm = std::max(0, printOffset.x());
+    out.printOffsetYmm = std::max(0, printOffset.y());
+    out.mediaHeightMm = std::clamp(
+        jobMap.value("mediaHeightMm", -1.0).toDouble(), -1.0, 152.0);
     out.pass = value("pass", 0);
     out.vsdMode = value("vsdMode", 0);
 

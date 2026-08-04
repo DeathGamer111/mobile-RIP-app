@@ -72,6 +72,8 @@ add_printflow_qt_test(PrintFlowRipPipelineTest PrintFlow.Rip.PipelineValidation
     ${PROJECT_SOURCE_DIR}/src/rip/MultiInkToneBuilder.h
     ${PROJECT_SOURCE_DIR}/src/rip/MultiInkToneBuilder.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/MultiInkTypes.h
+    ${PROJECT_SOURCE_DIR}/src/rip/X33WhiteToneBuilder.h
+    ${PROJECT_SOURCE_DIR}/src/rip/X33WhiteToneBuilder.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/PrintJobMultiInk.h
     ${PROJECT_SOURCE_DIR}/src/rip/PrintJobMultiInk.cpp
     ${PROJECT_SOURCE_DIR}/src/core/AssetManager.h
@@ -102,7 +104,35 @@ add_printflow_qt_test(PrintFlowVendorIsolationTest PrintFlow.Vendor.DirectPrintU
     ${PROJECT_SOURCE_DIR}/src/core/IPrintOutputClient.h
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiDirectPrintClient.h
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiDirectPrintClient.cpp
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiDirectPrintCompatibility.h
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiDirectPrintCompatibility.cpp
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.h
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.cpp
 )
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    set_target_properties(PrintFlowVendorIsolationTest PROPERTIES ENABLE_EXPORTS ON)
+endif()
+
+add_library(PrintFlowFakeMangledDirectPrintSdk SHARED
+    FakeMangledDirectPrintSdk.cpp
+)
+set_target_properties(PrintFlowFakeMangledDirectPrintSdk PROPERTIES
+    OUTPUT_NAME SYPrintAPIforPROII
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fake-sdk"
+)
+add_dependencies(PrintFlowVendorIsolationTest PrintFlowFakeMangledDirectPrintSdk)
+target_compile_definitions(PrintFlowVendorIsolationTest PRIVATE
+    PRINTFLOW_FAKE_MANGLED_SDK_PATH="$<TARGET_FILE:PrintFlowFakeMangledDirectPrintSdk>"
+)
+get_property(PRINTFLOW_CONFIGURED_SDK_ROOT TARGET PrintFlow
+    PROPERTY PRINTFLOW_DIRECT_PRINT_SDK_ROOT)
+if(PRINTFLOW_CONFIGURED_SDK_ROOT)
+    target_compile_definitions(PrintFlowVendorIsolationTest PRIVATE
+        PRINTFLOW_CONFIGURED_SDK_ROOT="${PRINTFLOW_CONFIGURED_SDK_ROOT}"
+    )
+endif()
 
 add_printflow_qt_test(PrintFlowNocaiPrnWriterTest PrintFlow.Vendor.NocaiPrnWriter
     NocaiPrnWriterTest.cpp
@@ -116,6 +146,8 @@ add_printflow_qt_test(PrintFlowCMYKAssetManagerTest PrintFlow.Rip.CMYKAssetManag
     ${PROJECT_SOURCE_DIR}/src/core/AssetManager.cpp
     ${PROJECT_SOURCE_DIR}/src/core/ColorManagementManager.h
     ${PROJECT_SOURCE_DIR}/src/core/ColorManagementManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/rip/X33WhiteToneBuilder.h
+    ${PROJECT_SOURCE_DIR}/src/rip/X33WhiteToneBuilder.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/PrintJobCMYK.h
     ${PROJECT_SOURCE_DIR}/src/rip/PrintJobCMYK.cpp
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.h

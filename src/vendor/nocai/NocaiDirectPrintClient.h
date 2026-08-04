@@ -18,19 +18,25 @@ class NocaiDirectPrintClient : public QObject, public IPrintOutputClient
 {
     Q_OBJECT
     Q_PROPERTY(bool available READ isAvailable NOTIFY statusChanged)
+    Q_PROPERTY(bool connected READ isConnected NOTIFY statusChanged)
     Q_PROPERTY(QString lastError READ lastError NOTIFY statusChanged)
     Q_PROPERTY(QString sdkRootPath READ sdkRootPath WRITE setSdkRootPath NOTIFY statusChanged)
+    Q_PROPERTY(bool autoDiscoverSdk READ autoDiscoverSdk WRITE setAutoDiscoverSdk NOTIFY statusChanged)
     Q_PROPERTY(QVariantList printers READ printers NOTIFY printersChanged)
     Q_PROPERTY(QStringList maintenanceSupportedPrinters READ maintenanceSupportedPrinters CONSTANT)
 
 public:
     explicit NocaiDirectPrintClient(QObject* parent = nullptr);
+    ~NocaiDirectPrintClient() override;
 
     bool isAvailable() override;
+    bool isConnected() const;
     QString vendorName() const override;
     QString lastError() const override;
     QString sdkRootPath() const;
     void setSdkRootPath(const QString& path);
+    bool autoDiscoverSdk() const;
+    void setAutoDiscoverSdk(bool enabled);
     QVariantList printers() const;
     QStringList maintenanceSupportedPrinters() const;
 
@@ -53,7 +59,7 @@ public:
     Q_INVOKABLE bool moveAxis(int axis, int direction);
     Q_INVOKABLE QVariantMap stopAxis(int axis);
     Q_INVOKABLE QVariantMap saveAxisPos(int axis);
-    Q_INVOKABLE bool setPrintHeight(int heightMm);
+    Q_INVOKABLE bool setPrintHeight(double heightMm);
     Q_INVOKABLE QVariantMap getPrintHeight();
     Q_INVOKABLE QVariantMap getJobSettings();
     Q_INVOKABLE bool setJobSettingsFromMap(const QVariantMap& settings);
@@ -61,6 +67,7 @@ public:
     Q_INVOKABLE bool importConfigFile(const QString& path);
     Q_INVOKABLE QVariantMap getAlignmentValues();
     Q_INVOKABLE bool setAlignmentValues(const QVariantMap& settings, int type);
+    Q_INVOKABLE bool printNozzleCheck();
     Q_INVOKABLE bool printAlignmentPattern(int type);
     Q_INVOKABLE QVariantMap getPrinterStatus();
     Q_INVOKABLE QVariantMap getPrinterInfo();
@@ -77,6 +84,7 @@ public:
                            const DirectPrintSettings& settings) override;
     bool printPackedJob(const DirectPrintRaster& raster,
                         const DirectPrintSettings& settings);
+    static int runSerializedPrintWorker(const QString& jobPath);
 
 signals:
     void statusChanged();
@@ -143,13 +151,20 @@ private:
     UVParamValues uvParamValuesFromMap(const QVariantMap& settings) const;
     QVariantMap newUvParamValuesToMap(const NewUVParamValues& values) const;
     NewUVParamValues newUvParamValuesFromMap(const QVariantMap& settings) const;
+    QString controllerErrorDetails() const;
+    bool submitPreparedJobIsolated(const DirectPrintRaster& raster,
+                                   const DirectPrintSettings& settings);
 
     mutable QRecursiveMutex m_mutex;
     QLibrary m_library;
+    bool m_symbolsResolved = false;
+    bool m_autoDiscoverSdk = true;
+    bool m_connected = false;
     QString m_sdkRootPath;
     QString m_resolvedSdkRoot;
     QString m_lastError;
     QVariantList m_printers;
+    int m_selectedPrinterIndex = -1;
 
     SearchPrinterFn m_searchPrinter = nullptr;
     ChoosePrinterFn m_choosePrinter = nullptr;
@@ -191,4 +206,15 @@ private:
     SetNewUVParamFunctionFn m_setNewUVParamFunction = nullptr;
     SetNewUVParamValuesFn m_setNewUVParamValues = nullptr;
     GetNewUVParamValuesFn m_getNewUVParamValues = nullptr;
+
+    // Optional diagnostic data exported by the legacy SDK. CurErrorInfo is
+    // the controller's raw 42-byte error response; the remaining values help
+    // distinguish a transport/raster failure from a printer hardware error.
+    const unsigned char* m_currentErrorInfo = nullptr;
+    const uint32_t* m_sdkJobProperty = nullptr;
+    const int* m_sdkPrinterError = nullptr;
+    const int* m_sdkNetError = nullptr;
+    const int* m_sdkUartError = nullptr;
+    const int* m_sdkErrorSlice = nullptr;
+    const int* m_sdkErrorSwath = nullptr;
 };

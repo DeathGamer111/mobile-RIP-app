@@ -27,7 +27,36 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 
+#if defined(Q_OS_LINUX) && !defined(NDEBUG)
+#include <csignal>
+#include <execinfo.h>
+#include <unistd.h>
+#endif
+
 namespace {
+#if defined(Q_OS_LINUX) && !defined(NDEBUG)
+void crashBacktraceHandler(int signalNumber)
+{
+    static constexpr char message[] =
+        "\nPrintFlow: fatal signal in native code; backtrace follows:\n";
+    ::write(STDERR_FILENO, message, sizeof(message) - 1);
+    void* frames[64] = {};
+    const int frameCount = ::backtrace(frames, 64);
+    ::backtrace_symbols_fd(frames, frameCount, STDERR_FILENO);
+    _exit(128 + signalNumber);
+}
+
+void installCrashBacktraceHandler()
+{
+    struct sigaction action = {};
+    action.sa_handler = crashBacktraceHandler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESETHAND;
+    sigaction(SIGSEGV, &action, nullptr);
+    sigaction(SIGABRT, &action, nullptr);
+}
+#endif
+
 void migrateLegacyAppData()
 {
     const QString newRoot = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
@@ -51,9 +80,20 @@ void migrateLegacyAppData()
  */
 int main(int argc, char *argv[]) {
 
+#if defined(Q_OS_LINUX) && !defined(NDEBUG)
+    installCrashBacktraceHandler();
+#endif
+
     QApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("PrintFlow"));
     app.setDesktopFileName(QStringLiteral("PrintFlow"));
+
+    const QStringList arguments = QCoreApplication::arguments();
+    if (arguments.size() == 3 &&
+        arguments.at(1) == QStringLiteral("--nocai-print-worker")) {
+        return NocaiDirectPrintClient::runSerializedPrintWorker(arguments.at(2));
+    }
+
     migrateLegacyAppData();
 
     ThemeManager themeManager;
@@ -105,6 +145,7 @@ int main(int argc, char *argv[]) {
     printJobMultiInk.setColorManager(&colorManager);
     printJobMultiInk.setDirectPrintClient(&nocaiDirectPrint);
     printJobCMYKOutput.setColorManager(&colorManager);
+    printJobCMYKOutput.setDirectPrintClient(&nocaiDirectPrint);
     
     // Cap decode allocations to reduce OOM risk with very large images (MB).
     // Set to 0 to disable the guard (not recommended).

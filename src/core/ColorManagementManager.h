@@ -36,6 +36,7 @@ class ColorManagementManager : public QObject {
     // Direct Nocai SDK print settings
     Q_PROPERTY(QString multiInkOutputMode      READ multiInkOutputMode      WRITE setMultiInkOutputMode    NOTIFY directPrintSettingsChanged)
     Q_PROPERTY(QString directPrintSdkRootPath  READ directPrintSdkRootPath  WRITE setDirectPrintSdkRootPath NOTIFY directPrintSettingsChanged)
+    Q_PROPERTY(QString multiInkDirectPrintSdkRootPath READ multiInkDirectPrintSdkRootPath WRITE setMultiInkDirectPrintSdkRootPath NOTIFY directPrintSettingsChanged)
 
     // Specialty ink helpers
     Q_INVOKABLE QVariantMap getWhiteParams(int inkMode) const;
@@ -135,6 +136,11 @@ public:
     QString directPrintSdkRootPath() const;
     Q_INVOKABLE void setDirectPrintSdkRootPath(const QString& path);
 
+    QString multiInkDirectPrintSdkRootPath() const;
+    Q_INVOKABLE void setMultiInkDirectPrintSdkRootPath(const QString& path);
+    Q_INVOKABLE QString directPrintSdkFamilyForPrinter(const QString& printerName) const;
+    Q_INVOKABLE QString directPrintSdkRootForPrinter(const QString& printerName) const;
+
     Q_INVOKABLE QVariantMap directPrintSettings() const;
     Q_INVOKABLE void setDirectPrintSettings(const QVariantMap& settings);
     Q_INVOKABLE QVariant directPrintSetting(const QString& key) const;
@@ -193,6 +199,8 @@ private:
     bool m_enableDotSwap       = false;
 
     QString m_multiInkOutputMode = "prn";
+    // Existing setting remains the legacy/standard-CMYK SDK root.
     QString m_directPrintSdkRootPath;
+    QString m_multiInkDirectPrintSdkRootPath;
     QVariantMap m_directPrintSettings;
 };

@@ -31,6 +31,7 @@ set(RIP_CORE_SOURCES
     src/core/PrintJobModel.h src/core/PrintJobModel.cpp
     src/core/ThemeManager.h src/core/ThemeManager.cpp
     src/vendor/nocai/NocaiDirectPrintClient.h src/vendor/nocai/NocaiDirectPrintClient.cpp
+    src/vendor/nocai/NocaiDirectPrintCompatibility.h src/vendor/nocai/NocaiDirectPrintCompatibility.cpp
     src/vendor/nocai/NocaiPrnWriter.h src/vendor/nocai/NocaiPrnWriter.cpp
 )
 
@@ -42,6 +43,7 @@ set(RIP_NATIVE_SOURCES
     src/rip/MultiInkScreenEngine.h src/rip/MultiInkScreenEngine.cpp
     src/rip/MultiInkToneBuilder.h src/rip/MultiInkToneBuilder.cpp
     src/rip/MultiInkTypes.h
+    src/rip/X33WhiteToneBuilder.h src/rip/X33WhiteToneBuilder.cpp
     src/rip/PrintJobMultiInk.h src/rip/PrintJobMultiInk.cpp
     src/rip/PrintJobCMYK.h src/rip/PrintJobCMYK.cpp
 )
@@ -79,6 +81,11 @@ qt_add_executable(PrintFlow
     ${RIP_PLATFORM_SOURCES}
     src/third_party/stb/stb_image.h
 )
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    set_target_properties(PrintFlow PROPERTIES ENABLE_EXPORTS ON)
+endif()
 
 target_include_directories(PrintFlow PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -174,20 +181,7 @@ target_compile_definitions(PrintFlow PRIVATE
     RIP_SELECTED_THEME_RESOURCE="${RIP_SELECTED_THEME_RESOURCE}"
 )
 
-set(DIRECT_PRINT_SDK_ROOT "$ENV{DIRECT_PRINT_SDK_ROOT}" CACHE PATH "Local vendor direct-print SDK root. This path is intentionally not committed.")
-if(NOT DIRECT_PRINT_SDK_ROOT)
-    set(DIRECT_PRINT_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/DemoForARM64Linux-260612/Demo260612")
-endif()
-
 if(ANDROID)
-    set(DIRECT_PRINT_SDK_LIBRARY "${DIRECT_PRINT_SDK_ROOT}/libSYPrintAPIforPROII.so")
-    if(EXISTS "${DIRECT_PRINT_SDK_LIBRARY}")
-        message(STATUS "Android direct-print SDK library: ${DIRECT_PRINT_SDK_LIBRARY}")
-        set_property(TARGET PrintFlow APPEND PROPERTY QT_ANDROID_EXTRA_LIBS "${DIRECT_PRINT_SDK_LIBRARY}")
-    else()
-        message(WARNING "Android direct-print SDK library not found at ${DIRECT_PRINT_SDK_LIBRARY}. The APK can still boot, but direct print will report unavailable.")
-    endif()
-
     set_target_properties(PrintFlow PROPERTIES
         QT_ANDROID_APP_NAME "PrintFlow"
         QT_ANDROID_PACKAGE_NAME "com.ripapp.printer"
@@ -196,6 +190,9 @@ if(ANDROID)
         QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
     )
 endif()
+
+include(cmake/DirectPrintSdk.cmake)
+printflow_configure_direct_print_sdk(PrintFlow)
 
 file(GLOB RIP_QML_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/qml/*.qml"

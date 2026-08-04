@@ -49,4 +49,42 @@ QtObject {
     property string aboutVendorName: manager ? manager.aboutVendorName : ""
     property string supportUrl: manager ? manager.supportUrl : ""
     property string copyrightText: manager ? manager.copyrightText : ""
+
+    readonly property bool mobile: Qt.platform.os === "android" || Qt.platform.os === "ios"
+    readonly property int defaultWindowWidth: 430
+    readonly property int defaultWindowHeight: 720
+    readonly property int pageMargin: mobile ? 10 : 12
+    readonly property int panePadding: mobile ? 12 : 16
+
+    function boundedWidth(availableWidth, maxWidth) {
+        if (availableWidth <= 0)
+            return 0
+        return mobile ? availableWidth : Math.min(availableWidth, maxWidth)
+    }
+
+    function headerButtonWidth(availableWidth) {
+        if (availableWidth < 340)
+            return 64
+        return availableWidth < 380 ? 72 : 88
+    }
+
+    function headerTitleSize(availableWidth) {
+        return availableWidth < 360 ? 17 : 20
+    }
+
+    function formLabelWidth(availableWidth, preferredWidth) {
+        if (availableWidth < 360)
+            return Math.max(82, Math.floor(availableWidth * 0.30))
+        if (availableWidth < 420)
+            return Math.max(96, Math.floor(availableWidth * 0.34))
+        return preferredWidth
+    }
+
+    function gridColumns(availableWidth, preferredColumns, minCellWidth) {
+        if (availableWidth <= 0)
+            return 1
+
+        const columns = Math.max(1, Math.floor(availableWidth / minCellWidth))
+        return Math.max(1, Math.min(preferredColumns, columns))
+    }
 }

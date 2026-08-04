@@ -107,7 +107,7 @@ Page {
             ThemedButton {
                 text: strings.trKey("common.back")
                 theme: editorPage.theme
-                Layout.preferredWidth: 88
+                Layout.preferredWidth: editorPage.theme.headerButtonWidth(editorPage.width)
                 padding: 12
                 font.pixelSize: 15
                 onClicked: editorPage.doBack()
@@ -118,9 +118,12 @@ Page {
             Label {
                 text: strings.trKey("imageEditor.title")
                 color: theme.text
-                font.pixelSize: 20
+                font.pixelSize: editorPage.theme.headerTitleSize(editorPage.width)
                 font.weight: Font.Medium
                 horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 Layout.alignment: Qt.AlignVCenter
             }
 
@@ -129,7 +132,7 @@ Page {
             ThemedButton {
                 text: strings.trKey("common.save")
                 theme: editorPage.theme
-                Layout.preferredWidth: 88
+                Layout.preferredWidth: editorPage.theme.headerButtonWidth(editorPage.width)
                 padding: 12
                 font.pixelSize: 15
                 onClicked: editorPage.doSave()
@@ -143,14 +146,14 @@ Page {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: bottomBar.top
-        anchors.margins: 12
+        anchors.margins: theme.pageMargin
         spacing: 12
 
         // Preview pane with optional crop overlay
         Pane {
             Layout.fillWidth: true
             Layout.preferredHeight: 260
-            padding: 12
+            padding: theme.panePadding
 
             background: Rectangle {
                 color: theme.surface
@@ -199,6 +202,7 @@ Page {
             ScrollBar.vertical.interactive: true
             ScrollBar.vertical.policy: ScrollBar.AsNeeded
             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            contentWidth: availableWidth
 
             Component.onCompleted: contentItem.flickableDirection = Flickable.VerticalFlick
 
@@ -212,7 +216,7 @@ Page {
                 // =========================
                 Pane {
                     Layout.fillWidth: true
-                    padding: 16
+                    padding: theme.panePadding
 
                     background: Rectangle {
                         color: theme.surface
@@ -223,7 +227,7 @@ Page {
 
                     ColumnLayout {
 						anchors.horizontalCenter: parent.horizontalCenter
-						width: Math.min(parent.width, editorPage.cardWidthNarrow)
+						width: theme.boundedWidth(parent.width, editorPage.cardWidthNarrow)
 						spacing: 12
 
 						Label {
@@ -236,9 +240,11 @@ Page {
 
 						Rectangle { height: 1; Layout.fillWidth: true; color: theme.divider; opacity: 0.8 }
 
-						RowLayout {
+						GridLayout {
 							Layout.fillWidth: true
-							spacing: 10
+                            columns: theme.gridColumns(width, 3, 118)
+							columnSpacing: 10
+                            rowSpacing: 10
 
 							ThemedButton { text: strings.trKey("imageEditor.originalSize"); theme: editorPage.theme; Layout.fillWidth: true; onClicked: { apply("resizeOriginal"); refreshImageSize() } }
 							ThemedButton { text: strings.trKey("imageEditor.halfSize");     theme: editorPage.theme; Layout.fillWidth: true; onClicked: { apply("resizeHalf"); refreshImageSize() } }
@@ -254,7 +260,7 @@ Page {
 						// Make resize row responsive (can wrap to two rows if narrow)
 						GridLayout {
 							Layout.fillWidth: true
-							columns: (width < 520 ? 2 : 4)
+							columns: theme.gridColumns(width, 4, 120)
 							columnSpacing: 8
 							rowSpacing: 8
 
@@ -299,7 +305,7 @@ Page {
                 // =========================
                 Pane {
                     Layout.fillWidth: true
-                    padding: 16
+                    padding: theme.panePadding
 
                     background: Rectangle {
                         color: theme.surface
@@ -310,7 +316,7 @@ Page {
 
 					ColumnLayout {
 						anchors.horizontalCenter: parent.horizontalCenter
-						width: Math.min(parent.width, editorPage.cardWidthNarrow)
+						width: theme.boundedWidth(parent.width, editorPage.cardWidthNarrow)
 						spacing: 12
 
 						Label {
@@ -332,7 +338,7 @@ Page {
 
 							// 4 buttons total
 							// 1 row if wide enough, otherwise 2×2
-							columns: (parent.width >= 460 ? 4 : 2)
+							columns: theme.gridColumns(parent.width, 4, 104)
 
 							// Match Effects sizing
 							readonly property int btnW: Math.floor(
@@ -380,7 +386,7 @@ Page {
                 // =========================
                 Pane {
                     Layout.fillWidth: true
-                    padding: 16
+                    padding: theme.panePadding
 
                     background: Rectangle {
                         color: theme.surface
@@ -391,7 +397,7 @@ Page {
 
                     ColumnLayout {
 						anchors.horizontalCenter: parent.horizontalCenter
-						width: Math.min(parent.width, editorPage.cardWidthMedium)
+						width: theme.boundedWidth(parent.width, editorPage.cardWidthMedium)
 						spacing: 12
 
                         Label {
@@ -408,7 +414,7 @@ Page {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 10
-                            Label { text: strings.trKey("imageEditor.brightness"); color: theme.text; Layout.preferredWidth: 110 }
+                            Label { text: strings.trKey("imageEditor.brightness"); color: theme.text; Layout.preferredWidth: theme.formLabelWidth(parent.width, 110) }
                             Slider {
                                 id: brightnessSlider
                                 from: -100; to: 100
@@ -426,7 +432,7 @@ Page {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 10
-                            Label { text: strings.trKey("imageEditor.contrast"); color: theme.text; Layout.preferredWidth: 110 }
+                            Label { text: strings.trKey("imageEditor.contrast"); color: theme.text; Layout.preferredWidth: theme.formLabelWidth(parent.width, 110) }
                             Slider {
                                 id: contrastSlider
                                 from: 0
@@ -450,7 +456,7 @@ Page {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 10
-                            Label { text: strings.trKey("imageEditor.hue"); color: theme.text; Layout.preferredWidth: 110 }
+                            Label { text: strings.trKey("imageEditor.hue"); color: theme.text; Layout.preferredWidth: theme.formLabelWidth(parent.width, 110) }
                             Slider {
                                 id: hueSlider
                                 value: hue
@@ -468,7 +474,7 @@ Page {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 10
-                            Label { text: strings.trKey("imageEditor.saturation"); color: theme.text; Layout.preferredWidth: 110 }
+                            Label { text: strings.trKey("imageEditor.saturation"); color: theme.text; Layout.preferredWidth: theme.formLabelWidth(parent.width, 110) }
                             Slider {
                                 id: saturationSlider
                                 value: saturation
@@ -486,7 +492,7 @@ Page {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 10
-                            Label { text: strings.trKey("imageEditor.sharpen"); color: theme.text; Layout.preferredWidth: 110 }
+                            Label { text: strings.trKey("imageEditor.sharpen"); color: theme.text; Layout.preferredWidth: theme.formLabelWidth(parent.width, 110) }
                             Slider {
                                 id: sharpenSlider
                                 value: sharpness
@@ -504,7 +510,7 @@ Page {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 10
-                            Label { text: strings.trKey("imageEditor.gamma"); color: theme.text; Layout.preferredWidth: 110 }
+                            Label { text: strings.trKey("imageEditor.gamma"); color: theme.text; Layout.preferredWidth: theme.formLabelWidth(parent.width, 110) }
                             Slider {
                                 id: gammaSlider
                                 value: gamma
@@ -526,7 +532,7 @@ Page {
 				// =========================
 				Pane {
 					Layout.fillWidth: true
-					padding: 16
+					padding: theme.panePadding
 
 					background: Rectangle {
 						color: theme.surface
@@ -537,7 +543,7 @@ Page {
 
 					ColumnLayout {
 						anchors.horizontalCenter: parent.horizontalCenter
-						width: Math.min(parent.width, editorPage.cardWidthNarrow)
+						width: theme.boundedWidth(parent.width, editorPage.cardWidthNarrow)
 						spacing: 12
 
 						Label {
@@ -559,7 +565,7 @@ Page {
 
 							// Decide layout from the *known* container width (the ColumnLayout width)
 							// 5 columns = 1 row, else 3 columns = 2 rows (5 items -> 2 rows max)
-							columns: (parent.width >= 560 ? 5 : 3)
+							columns: theme.gridColumns(parent.width, 5, 96)
 
 							// Uniform button sizing
 							readonly property int btnW: Math.floor((parent.width - (columns - 1) * columnSpacing) / columns)

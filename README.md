@@ -14,7 +14,7 @@ The current codebase is focused on Linux desktop development with CMake, CUPS, I
 - Main development build script: `./Dev_Build_App.sh`
 - Primary executable target: `PrintFlow`
 - Linux desktop status: builds and runs with the native RIP pipeline, CUPS integration, ImageMagick, Little CMS, theme resources, string resources, and the local test suite.
-- Android APK status: x86_64 emulator builds use boot-safe Android facades without the direct-print SDK; arm64-v8a physical-device builds can package a local vendor direct-print SDK when `DIRECT_PRINT_SDK_ROOT` is set.
+- Android APK status: x86_64 emulator builds use boot-safe Android facades. Android direct print is packaged only when the supplied SDK contains an Android API library for the target ABI; Linux ARM64 libraries are not placed into Android APKs.
 - Base product identity: `PrintFlow`; customer or vendor display branding belongs in theme configuration.
 
 ## Features
@@ -104,6 +104,23 @@ For local builds that generate multi-ink output, the app expects `resources/asse
 
 Theme assets live under `resources/themes/<theme-id>/assets/` or `resources/vendor/<vendor-id>/assets/` and are compiled into Qt resources when referenced by theme JSON. Vendor SDK drops and local vendor assets that are not safe to publish should remain outside tracked files or under ignored local paths.
 
+## Direct-print SDK selection
+
+CMake selects direct-print binaries using the target platform and target processor, including when cross-compiling.
+
+Supply either an extracted SDK root or an archive:
+
+```bash
+cmake -S . -B build -DDIRECT_PRINT_SDK_ROOT=/path/to/extracted/sdk
+cmake -S . -B build -DDIRECT_PRINT_SDK_ARCHIVE=/path/to/vendor-sdk.zip
+```
+
+The settings may also be exported as environment variables. When neither is set, Linux builds auto-detect one matching local `DemoForX64Linux*.zip` or `DemoForARM64Linux*.tar*` archive. Archives are extracted only under the build directory.
+
+For Linux, CMake validates the ELF machine type and stages `libSYPrintAPIforPROII.so` beside `PrintFlow`, preserving the required `PrinterSocketDLL/linux/<architecture>/PrinterSocket.so` subtree. Set `-DDIRECT_PRINT_SDK_STRICT=ON` to make a missing or mismatched SDK a configuration error.
+
+The July 2026 x86-64 SDK exports internal `API_*` C++ symbols instead of most documented C names. The adapter prefers the documented interface and falls back to the known x86-64 aliases, allowing this package to load while remaining compatible with a corrected vendor build.
+
 ## Requirements
 
 The development script installs/checks the main Linux dependencies:
@@ -126,6 +143,18 @@ The root script delegates to `scripts/dev_build_linux.sh`. It uses `sudo apt-get
 ```text
 ~/.local/share/PrintFlow/runtime_assets/
 ```
+
+For direct-attached Nocai printers, the Linux development build also:
+
+- grants the final `PrintFlow` executable `CAP_NET_RAW`, which the vendor SDK
+  needs for raw-socket printer discovery; and
+- configures a wired interface with carrier but no existing IPv4 address for
+  IPv4 link-local networking (`169.254.0.0/16`).
+
+Set `PRINTFLOW_PRINTER_INTERFACE=enp1s0` (or another interface name) to select
+an interface explicitly. Set `PRINTFLOW_CONFIGURE_PRINTER_NETWORK=0` to leave
+network configuration untouched. The capability is intentionally applied after
+the build because relinking the executable removes file capabilities.
 
 ## Standard Build
 
@@ -224,9 +253,11 @@ Optional environment variable for physical-device direct-print packaging:
 
 ```bash
 export DIRECT_PRINT_SDK_ROOT="/path/to/local/vendor/sdk/drop"
+# Or:
+export DIRECT_PRINT_SDK_ARCHIVE="/path/to/local/vendor/sdk/drop.zip"
 ```
 
-For emulator builds on a Linux workstation, point `QT_ANDROID_CMAKE` at a Qt Android x86_64 kit and use the default `ANDROID_ABI=x86_64`. For physical-device direct-print builds, point `QT_ANDROID_CMAKE` at an arm64 kit, set `ANDROID_ABI=arm64-v8a`, and set `DIRECT_PRINT_SDK_ROOT` to a local vendor direct-print SDK drop. The SDK files are intentionally not committed.
+Use only one SDK variable at a time. Android packaging requires `libSYPrintAPIforPROII.so` under an `android/<abi>/` directory in the supplied drop. A Linux/glibc API library is deliberately rejected for Android even when its CPU architecture matches. If `.android-env` points at the x86_64 Qt kit, the build script switches to the sibling `android_arm64_v8a` kit when it exists. SDK files remain local and ignored.
 
 Install the local Android SDK command-line tools, emulator packages, and a Pixel-style AVD:
 
@@ -246,6 +277,20 @@ Build, install, and launch it on the emulator:
 scripts/android_build_install_run.sh
 ```
 
+Build, install, and launch it on a USB Android device:
+
+```bash
+./Dev_Build_App.sh --android-device
+```
+
+or directly:
+
+```bash
+ANDROID_TARGET=device scripts/android_build_install_run.sh
+```
+
+The device path defaults to `ANDROID_ABI=arm64-v8a`, `BUILD_DIR=build-android-device`, and `adb -d`. Set `ANDROID_SERIAL=<serial>` when more than one physical device is connected.
+
 The Android build defaults to `ANDROID_ABI=x86_64` for emulator testing on Linux. The x86_64 emulator requires KVM/VM acceleration with writable `/dev/kvm`; without it, `scripts/start_android_emulator.sh` and `scripts/run_android_emulator.sh` fail early with a host-setup message.
 
 ## Development Notes
@@ -260,6 +305,7 @@ The Android build defaults to `ANDROID_ABI=x86_64` for emulator testing on Linux
 - `scripts/dev_build_android.sh` validates the Android toolchain and builds the APK target.
 - `scripts/start_android_emulator.sh` starts the configured AVD without requiring an APK.
 - `scripts/run_android_emulator.sh` installs and launches the latest built APK.
+- `scripts/run_android_device.sh` installs and launches the latest built APK on a USB Android device.
 - `scripts/android_build_install_run.sh` builds, installs, and launches in one step.
 
 ## Verification

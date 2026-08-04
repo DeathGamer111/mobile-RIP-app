@@ -16,6 +16,8 @@
 #include <Magick++.h>
 #include "AssetManager.h"
 #include "ColorManagementManager.h"
+#include "IPrintOutputClient.h"
+#include "X33WhiteToneBuilder.h"
 
 // CMYK raster pipeline: input load -> optional ICC convert -> CMYK separation ->
 // blue-noise thresholding -> dot classification, then vendor PRN output.
@@ -48,11 +50,13 @@ signals:
 
 public slots:
     Q_INVOKABLE void runPRNGeneration(const QVariantMap& jobMap, const QString& outputPath);		// End-to-end async entry.
+    Q_INVOKABLE void runDirectPrint(const QVariantMap& jobMap);
 
 public:
     explicit PrintJobCMYK(QObject* parent = nullptr);
     
     void setColorManager(ColorManagementManager* mgr);
+    void setDirectPrintClient(IPrintOutputClient* client);
 
     // QML-exposed pipeline
     Q_INVOKABLE bool loadInputImage(const QString& imagePath);										// Read + stage RGB/CMYK.
@@ -79,8 +83,18 @@ public:
 
 
 private:
+    struct RasterPayload {
+        std::vector<std::vector<std::vector<uint8_t>>> packedLines;
+        std::vector<int> channelOrder;
+        int width = 0;
+        int height = 0;
+        int xdpi = 0;
+        int ydpi = 0;
+        int bytesPerLine = 0;
+    };
 
 	ColorManagementManager* m_colorManager = nullptr;
+    IPrintOutputClient* m_directPrintClient = nullptr;
 
     // Working images and intermediate data.
     Magick::Image inputImage;                        	// RGB input (temporary copy)
@@ -97,6 +111,18 @@ private:
     QString tempImagePath;
 	bool assetsPrepared = false;
     std::unique_ptr<QTemporaryDir> tempDir;
+
+    // Per-job white configuration for the legacy X-33 path. One logical
+    // screened W plane is generated here and emitted twice as YMCKWW.
+    X33WhiteToneBuilder::Mode x33WhiteMode = X33WhiteToneBuilder::Mode::Off;
+    QString x33WhitePlatePath;
+    QString x33WhiteMaskKey = QStringLiteral("w");
+    int x33WhiteThreshold = 8;
+    int x33WhiteDensity = 255;
+    bool x33WhiteUseOwnDotStrategy = false;
+    int x33WhiteSmallDotThreshold = 104;
+    int x33WhiteMedDotThreshold = 168;
+    bool x33WhiteEnablePromotion = false;
     
     // ICC profile state.
     Magick::Blob loadICCProfile(const QString& filePath);
@@ -109,6 +135,16 @@ private:
    	DotStrategy dotStrategy;
    	uint32_t screenSeed = 0;  // seed the mask phase per run
     std::vector<std::vector<uint8_t>> dotClassification(const std::vector<uint8_t>& dithered, const std::vector<uint8_t>& mask, const std::vector<uint8_t>& channel, int width, int height, const DotStrategy& strategy);
+    bool prepareJobForOutput(const QVariantMap& jobMap, int& xdpi, int& ydpi);
+    bool buildRasterPayload(int xdpi, int ydpi, RasterPayload& payload);
+    bool loadExternalPlateTone(const QString& platePath,
+                               std::vector<uint8_t>& outTone,
+                               int width,
+                               int height) const;
+    bool writePRNFile(const RasterPayload& payload, const QString& outputPath);
+    bool sendDirectPrint(const RasterPayload& payload, const QVariantMap& jobMap);
+    DirectPrintSettings directPrintSettingsFromJob(const QVariantMap& jobMap,
+                                                   const RasterPayload& payload) const;
     
     // void apply4x4Promotion(std::vector<std::vector<uint8_t>>& dotMap, int width, int height);
     void apply4x4Promotion(std::vector<std::vector<uint8_t>>& dotMap, const std::vector<uint8_t>& tone, int width, int height);

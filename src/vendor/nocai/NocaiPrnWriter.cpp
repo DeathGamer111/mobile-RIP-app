@@ -149,6 +149,41 @@ std::vector<std::vector<uint8_t>> NocaiPrnWriter::packTo2Bpp(
     return packedLines;
 }
 
+NocaiPrnWriter::StandardCmykHeader NocaiPrnWriter::makeStandardCmykHeader(
+    int width,
+    int height,
+    int xdpi,
+    int ydpi,
+    int bytesPerLine)
+{
+    return makeStandardX33Header(
+        width, height, xdpi, ydpi, bytesPerLine, 4);
+}
+
+NocaiPrnWriter::StandardX33Header NocaiPrnWriter::makeStandardX33Header(
+    int width,
+    int height,
+    int xdpi,
+    int ydpi,
+    int bytesPerLine,
+    int colors)
+{
+    return {
+        0x00005555,
+        static_cast<uint32_t>(xdpi),
+        static_cast<uint32_t>(ydpi),
+        static_cast<uint32_t>(bytesPerLine),
+        static_cast<uint32_t>(height),
+        static_cast<uint32_t>(width),
+        0, // PaperWidth
+        static_cast<uint32_t>(colors), // Colors: YMCK or YMCKWW
+        1, // Bits: vendor enum value for two bits per dot
+        1, // Pass: required by the proven X-33 PRN format
+        0, // VsdMode
+        0  // Reserved
+    };
+}
+
 bool NocaiPrnWriter::writeStandardCmykPrn(
     const std::vector<std::vector<std::vector<uint8_t>>>& packedLines,
     const std::vector<int>& channelOrder,
@@ -158,8 +193,37 @@ bool NocaiPrnWriter::writeStandardCmykPrn(
     int ydpi,
     const QString& outputPath)
 {
+    if (channelOrder != std::vector<int>({2, 1, 0, 3})) {
+        qWarning() << "NocaiPrnWriter: standard CMYK order must be YMCK.";
+        return false;
+    }
+    return writeStandardX33Prn(
+        packedLines, channelOrder, width, height, xdpi, ydpi, outputPath);
+}
+
+bool NocaiPrnWriter::writeStandardX33Prn(
+    const std::vector<std::vector<std::vector<uint8_t>>>& packedLines,
+    const std::vector<int>& channelOrder,
+    int width,
+    int height,
+    int xdpi,
+    int ydpi,
+    const QString& outputPath)
+{
     if (packedLines.empty() || packedLines[0].empty()) {
-        qWarning() << "NocaiPrnWriter: standard CMYK packed lines are empty.";
+        qWarning() << "NocaiPrnWriter: standard X-33 packed lines are empty.";
+        return false;
+    }
+
+    const bool isCmyk = channelOrder == std::vector<int>({2, 1, 0, 3});
+    const bool isCmykWhite = channelOrder == std::vector<int>({2, 1, 0, 3, 4, 4});
+    if (!isCmyk && !isCmykWhite) {
+        qWarning() << "NocaiPrnWriter: X-33 plane order must be YMCK or YMCKWW.";
+        return false;
+    }
+    if (width <= 0 || height <= 0) {
+        qWarning() << "NocaiPrnWriter: invalid X-33 raster dimensions."
+                   << width << "x" << height;
         return false;
     }
 
@@ -171,22 +235,36 @@ bool NocaiPrnWriter::writeStandardCmykPrn(
     }
 
     const uint32_t bytesPerLine = static_cast<uint32_t>(packedLines[0][0].size());
-    const uint32_t header[12] = {
-        0x00005555,
-        static_cast<uint32_t>(xdpi),
-        static_cast<uint32_t>(ydpi),
-        bytesPerLine,
-        static_cast<uint32_t>(height),
-        static_cast<uint32_t>(width),
-        0,
-        4,
-        1,
-        1,
-        0,
-        0
-    };
+    if (bytesPerLine == 0) {
+        qWarning() << "NocaiPrnWriter: X-33 bytes per line is zero.";
+        return false;
+    }
 
-    out.write(reinterpret_cast<const char*>(header), sizeof(header));
+    for (const int channel : channelOrder) {
+        if (channel < 0 || channel >= static_cast<int>(packedLines.size()) ||
+            packedLines[channel].size() != static_cast<size_t>(height)) {
+            qWarning() << "NocaiPrnWriter: X-33 channel row count is invalid for channel"
+                       << channel;
+            return false;
+        }
+        for (int row = 0; row < height; ++row) {
+            if (packedLines[channel][row].size() != bytesPerLine) {
+                qWarning() << "NocaiPrnWriter: X-33 line size mismatch at channel"
+                           << channel << "row" << row;
+                return false;
+            }
+        }
+    }
+
+    const StandardX33Header header = makeStandardX33Header(
+        width,
+        height,
+        xdpi,
+        ydpi,
+        static_cast<int>(bytesPerLine),
+        static_cast<int>(channelOrder.size()));
+
+    out.write(reinterpret_cast<const char*>(header.data()), sizeof(header));
 
     for (int row = 0; row < height; ++row) {
         for (int ch : channelOrder)
@@ -194,7 +272,12 @@ bool NocaiPrnWriter::writeStandardCmykPrn(
     }
 
     out.close();
-    qDebug() << "Final PRN file created:" << outputPath;
+    if (!out) {
+        qWarning() << "NocaiPrnWriter: failed while writing X-33 PRN:" << outputPath;
+        return false;
+    }
+    qDebug() << "Final X-33 PRN file created:" << outputPath
+             << "with" << channelOrder.size() << "planes.";
     return true;
 }
 

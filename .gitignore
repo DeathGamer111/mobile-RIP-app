@@ -95,6 +95,9 @@ resources/assets/blue_noise_mask_*/**
 
 # Local vendor SDK drops
 DemoForARM64Linux-*/
+DemoFor*Linux*.zip
+DemoFor*Linux*.tar
+DemoFor*Linux*.tar.gz
 src/vendor/nocai/SDKExample*/
 src/vendor/nocai/sdk*/
 src/vendor/nocai/local*/

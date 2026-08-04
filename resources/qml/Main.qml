@@ -1,7 +1,7 @@
 import QtQuick
-import QtQuick.Layouts
 import QtQuick.Controls
 import QtQuick.Controls.Material
+import QtQuick.Window
 import "."
 
 
@@ -9,8 +9,14 @@ import "."
 ApplicationWindow {
     id: root
     visible: true
-    width: 475		// Default App window width; keep modest to fit small screens.
-    height: 615		// Default App window height.
+    readonly property int availableScreenWidth: Screen.desktopAvailableWidth > 0 ? Screen.desktopAvailableWidth : Screen.width
+    readonly property int availableScreenHeight: Screen.desktopAvailableHeight > 0 ? Screen.desktopAvailableHeight : Screen.height
+
+    width: theme.mobile ? availableScreenWidth : theme.defaultWindowWidth
+    height: theme.mobile ? availableScreenHeight : theme.defaultWindowHeight
+    minimumWidth: theme.mobile ? 0 : 320
+    minimumHeight: theme.mobile ? 0 : 480
+    visibility: theme.mobile ? Window.AutomaticVisibility : Window.Windowed
     title: theme.appName.length > 0 ? theme.appName : (strings.language, strings.trKey("app.title"))
     
     readonly property Theme theme: Theme { dark: true; manager: themeManager }
@@ -25,10 +31,12 @@ ApplicationWindow {
     // Lightweight app-scoped state shared across views.
     QtObject {
         id: appState
-        property string selectedPrinter: "X-36NC (Photo Printer)"	// Current printer selection (name or ID).
+        property string selectedPrinter: colorManager.selectedPrinter.length > 0
+                                         ? colorManager.selectedPrinter
+                                         : "X-33"					// Current printer selection (name or ID).
         property string selectedPPD: ""								// Chosen PPD/profile path or identifier.
         property bool usingSimulatedPrinter: true					// When true, use mock device behavior.
-		property bool usingMultiInkPrinter: true					// When true, use the PrintJobMultiInk backend.
+		property bool usingMultiInkPrinter: selectedPrinter === "X-36NC (Photo Printer)"
 		property int multiInkInkMode: 10							// 4,5,6,7,8,10 – current ink layout.
         property string platformName: platformCapabilities.platformName
         property bool supportsCupsPrinting: platformCapabilities.supportsCupsPrinting
@@ -58,22 +66,39 @@ ApplicationWindow {
         property int sdkPass: colorManager.directPrintSetting("pass")
         property int sdkVsdMode: colorManager.directPrintSetting("vsdMode")
         property bool isGeneratingPRN: false						// Global flag to gate UI during PRN generation.
+
+        function directPrintSdkFamily() {
+            return colorManager.directPrintSdkFamilyForPrinter(selectedPrinter)
+        }
+
+        function configureDirectPrintSdk() {
+            const family = directPrintSdkFamily()
+            nocaiDirectPrint.sdkRootPath = colorManager.directPrintSdkRootForPrinter(selectedPrinter)
+            // Only the current X-33 SDK may use packaged/environment fallback discovery.
+            nocaiDirectPrint.autoDiscoverSdk = family === "legacy-cmyk"
+        }
     }
 
     // Simple view stack; JobListView is our entry screen.
     StackView {
         id: stackView
         anchors.fill: parent
+        clip: true
 
 		// Push initial view and pass shared objects it needs.
         Component.onCompleted: {
         	// Startup defaults so the app is ready to print immediately
         	colorManager.selectedPrinter = appState.selectedPrinter
-            nocaiDirectPrint.sdkRootPath = colorManager.directPrintSdkRootPath
+            appState.configureDirectPrintSdk()
         	
-			printJobMultiInk.setInkMode(appState.multiInkInkMode)
-		    printJobMultiInk.enableDefaultInputCMYK(true)
-		    printJobMultiInk.prepareAssets()
+            if (appState.usingMultiInkPrinter) {
+			    printJobMultiInk.setInkMode(appState.multiInkInkMode)
+		        printJobMultiInk.enableDefaultInputCMYK(true)
+		        printJobMultiInk.prepareAssets()
+            } else {
+                printJobCMYK.enableDefaultInputCMYK(true)
+                printJobCMYK.prepareAssets()
+            }
         
             stackView.push("qrc:/qml/JobListView.qml", {
                 stackView: stackView,					// Allow child to navigate (push/pop)

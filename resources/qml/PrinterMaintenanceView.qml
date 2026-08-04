@@ -18,7 +18,7 @@ Page {
     property int headMask: 3
     property int axis: 0
     property int axisDirection: 0
-    property int printHeight: 0
+    property real printHeight: 0.0
     property int printX: 0
     property int printY: 0
     property int alignmentType: 0
@@ -95,9 +95,20 @@ Page {
     component ActionButton: ThemedButton {
         theme: root.theme
         Layout.fillWidth: true
-        Layout.preferredHeight: 42
+        Layout.minimumWidth: 0
+        Layout.preferredWidth: 1
+        Layout.preferredHeight: 44
+        Layout.minimumHeight: 44
+        Layout.maximumHeight: 44
         padding: 10
         font.pixelSize: 13
+    }
+
+    component ActionGrid: GridLayout {
+        Layout.fillWidth: true
+        columns: root.theme.gridColumns(width, 2, 150)
+        columnSpacing: 10
+        rowSpacing: 10
     }
 
     component FieldLabel: Label {
@@ -105,6 +116,16 @@ Page {
         color: theme.text
         verticalAlignment: Text.AlignVCenter
         Layout.fillWidth: true
+    }
+
+    function goBack() {
+        if (root.stackView && root.stackView.depth > 1) {
+            root.stackView.pop()
+            return
+        }
+
+        if (StackView.view)
+            StackView.view.pop()
     }
 
     function printStatusText(code) {
@@ -227,27 +248,31 @@ Page {
             ThemedButton {
                 text: "Back"
                 theme: root.theme
-                Layout.preferredWidth: 88
+                Layout.preferredWidth: root.theme.headerButtonWidth(root.width)
                 Layout.preferredHeight: 40
-                onClicked: root.stackView.pop()
+                onClicked: root.goBack()
             }
 
             Label {
                 text: "Printer Maintenance"
                 color: root.theme.text
-                font.pixelSize: 20
+                font.pixelSize: root.theme.headerTitleSize(root.width)
                 font.weight: Font.Medium
                 Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
             }
 
             ThemedButton {
                 text: "Connect"
                 theme: root.theme
                 enabled: root.maintenanceSupported
-                Layout.preferredWidth: 88
+                Layout.preferredWidth: root.theme.headerButtonWidth(root.width)
                 Layout.preferredHeight: 40
                 onClicked: root.runAction("ConnectPrinter", function () {
+                        if (!nocaiDirectPrint.refreshPrinters())
+                            return false;
                         if (root.appState.sdkSelectedPrinterIndex >= 0)
                             nocaiDirectPrint.choosePrinter(root.appState.sdkSelectedPrinterIndex);
                         const ok = nocaiDirectPrint.connectPrinter();
@@ -265,10 +290,10 @@ Page {
         contentWidth: availableWidth
 
         ColumnLayout {
-            width: Math.min(parent.width, 760)
+            width: root.theme.boundedWidth(parent.width, 520)
             anchors.horizontalCenter: parent.horizontalCenter
             spacing: 12
-            anchors.margins: 12
+            anchors.margins: root.theme.pageMargin
 
             Section {
                 title: "Status"
@@ -313,11 +338,11 @@ Page {
                 title: "Head Maintenance"
                 theme: root.theme
                 sectionEnabled: root.controlsEnabled
-                help: "Head mask is a bitmask: bit 0 selects head 1, bit 1 selects head 2, and so on. A value of 3 selects heads 1 and 2."
+                help: "Head mask is a bitmask: bit 0 selects head 1 and bit 1 selects head 2, so 3 selects both X-33 heads. Nozzle Check prints the SDK's diagnostic pattern. Automatic Head Cleaning runs the printer's cleaning cycle. Flash Spray rapidly fires the selected nozzles at the maintenance station to keep them wet or clear light drying; stop it when the refresh is complete."
 
                 GridLayout {
                     Layout.fillWidth: true
-                    columns: 2
+                    columns: root.theme.gridColumns(width, 2, 150)
                     columnSpacing: 12
                     rowSpacing: 8
 
@@ -326,6 +351,8 @@ Page {
                         theme: root.theme
                     }
                     SpinBox {
+                        id: maintenancePrintHeightSpin
+                        Layout.fillWidth: true
                         from: 0
                         to: 65535
                         value: root.headMask
@@ -333,24 +360,26 @@ Page {
                     }
                 }
 
-                GridLayout {
-                    Layout.fillWidth: true
-                    columns: 2
-                    columnSpacing: 10
-                    rowSpacing: 10
-
+                ActionGrid {
+                    ActionButton {
+                        text: "Print Nozzle Check"
+                        theme: root.theme
+                        onClicked: root.runAction("PrintNozzleCheck", function () {
+                                return nocaiDirectPrint.printNozzleCheck();
+                            }, true)
+                    }
+                    ActionButton {
+                        text: "Automatic Head Cleaning"
+                        theme: root.theme
+                        onClicked: root.runAction("StartCleanOperation", function () {
+                                return nocaiDirectPrint.startCleanOperation(root.headMask);
+                            }, true)
+                    }
                     ActionButton {
                         text: "Wipe Heads"
                         theme: root.theme
                         onClicked: root.runAction("WipePrintHead", function () {
                                 return nocaiDirectPrint.wipePrintHead(root.headMask);
-                            }, true)
-                    }
-                    ActionButton {
-                        text: "Auto Clean"
-                        theme: root.theme
-                        onClicked: root.runAction("StartCleanOperation", function () {
-                                return nocaiDirectPrint.startCleanOperation(root.headMask);
                             }, true)
                     }
                     ActionButton {
@@ -368,16 +397,16 @@ Page {
                             }, true)
                     }
                     ActionButton {
-                        text: "Spit Heads"
+                        text: "Start Flash Spray"
                         theme: root.theme
-                        onClicked: root.runAction("SpitPrintHead", function () {
+                        onClicked: root.runAction("StartFlashSpray", function () {
                                 return nocaiDirectPrint.spitPrintHead(root.headMask);
                             }, true)
                     }
                     ActionButton {
-                        text: "Stop Spit"
+                        text: "Stop Flash Spray"
                         theme: root.theme
-                        onClicked: root.runAction("StopSpitOperation", function () {
+                        onClicked: root.runAction("StopFlashSpray", function () {
                                 return nocaiDirectPrint.stopSpitOperation();
                             }, true)
                     }
@@ -399,7 +428,7 @@ Page {
 
                 GridLayout {
                     Layout.fillWidth: true
-                    columns: 2
+                    columns: root.theme.gridColumns(width, 2, 150)
                     columnSpacing: 12
                     rowSpacing: 8
 
@@ -408,6 +437,7 @@ Page {
                         theme: root.theme
                     }
                     SpinBox {
+                        Layout.fillWidth: true
                         from: 0
                         to: 2
                         value: root.axis
@@ -418,6 +448,7 @@ Page {
                         theme: root.theme
                     }
                     SpinBox {
+                        Layout.fillWidth: true
                         from: 0
                         to: 1
                         value: root.axisDirection
@@ -428,19 +459,41 @@ Page {
                         theme: root.theme
                     }
                     SpinBox {
+                        Layout.fillWidth: true
                         from: 0
-                        to: 65535
-                        value: root.printHeight
-                        onValueModified: root.printHeight = value
+                        to: 1520
+                        stepSize: 1
+                        editable: true
+                        value: Math.round(root.printHeight * 10)
+                        textFromValue: function(value, locale) {
+                            return Number(value / 10.0).toLocaleString(locale, 'f', 1)
+                        }
+                        valueFromText: function(text, locale) {
+                            return Math.round(Number.fromLocaleString(locale, text) * 10.0)
+                        }
+                        validator: DoubleValidator {
+                            bottom: 0.0
+                            top: 152.0
+                            decimals: 1
+                            notation: DoubleValidator.StandardNotation
+                        }
+                        contentItem: TextInput {
+                            z: 2
+                            text: maintenancePrintHeightSpin.displayText
+                            color: root.theme.text
+                            selectionColor: root.theme.accent
+                            selectedTextColor: root.theme.bg
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            selectByMouse: true
+                            validator: maintenancePrintHeightSpin.validator
+                            inputMethodHints: Qt.ImhFormattedNumbersOnly
+                        }
+                        onValueModified: root.printHeight = value / 10.0
                     }
                 }
 
-                GridLayout {
-                    Layout.fillWidth: true
-                    columns: 2
-                    columnSpacing: 10
-                    rowSpacing: 10
-
+                ActionGrid {
                     ActionButton {
                         text: "Move Axis"
                         theme: root.theme
@@ -495,9 +548,7 @@ Page {
                 sectionEnabled: root.controlsEnabled
                 help: "Read the engine's current job settings before applying changes. Import/export uses the vendor PFG configuration file format."
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 10
+                ActionGrid {
                     ActionButton {
                         text: "Read Job Settings"
                         theme: root.theme
@@ -519,9 +570,7 @@ Page {
                     wrapMode: Text.WordWrap
                 }
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 10
+                ActionGrid {
                     ActionButton {
                         text: "Export Config"
                         theme: root.theme
@@ -539,11 +588,11 @@ Page {
                 title: "Alignment"
                 theme: root.theme
                 sectionEnabled: root.controlsEnabled
-                help: "Value type selects which alignment field to write. Pattern type selects the printer-generated alignment chart, including nozzle check, step, bidirectional, spacing, and channel-alignment patterns."
+                help: "Value type selects which alignment field to write. Pattern type selects a printer-generated calibration chart. Use the dedicated Head Maintenance button for the common nozzle check; this section exposes all pattern types for advanced alignment work."
 
                 GridLayout {
                     Layout.fillWidth: true
-                    columns: 2
+                    columns: root.theme.gridColumns(width, 2, 150)
                     columnSpacing: 12
                     rowSpacing: 8
 
@@ -552,6 +601,7 @@ Page {
                         theme: root.theme
                     }
                     SpinBox {
+                        Layout.fillWidth: true
                         from: 0
                         to: 5
                         value: root.alignmentType
@@ -562,6 +612,7 @@ Page {
                         theme: root.theme
                     }
                     SpinBox {
+                        Layout.fillWidth: true
                         from: 0
                         to: 22
                         value: root.alignmentPatternType
@@ -569,9 +620,7 @@ Page {
                     }
                 }
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 10
+                ActionGrid {
                     ActionButton {
                         text: "Read Alignment"
                         theme: root.theme
@@ -610,7 +659,7 @@ Page {
 
                 GridLayout {
                     Layout.fillWidth: true
-                    columns: 2
+                    columns: root.theme.gridColumns(width, 2, 150)
                     columnSpacing: 12
                     rowSpacing: 8
 
@@ -619,6 +668,7 @@ Page {
                         theme: root.theme
                     }
                     SpinBox {
+                        Layout.fillWidth: true
                         from: 0
                         to: 65535
                         value: root.printX
@@ -629,6 +679,7 @@ Page {
                         theme: root.theme
                     }
                     SpinBox {
+                        Layout.fillWidth: true
                         from: 0
                         to: 65535
                         value: root.printY
@@ -639,6 +690,7 @@ Page {
                         theme: root.theme
                     }
                     SpinBox {
+                        Layout.fillWidth: true
                         from: 0
                         to: 4
                         value: root.uvType
@@ -649,6 +701,7 @@ Page {
                         theme: root.theme
                     }
                     SpinBox {
+                        Layout.fillWidth: true
                         from: 0
                         to: 6
                         value: root.newUvType
@@ -659,6 +712,7 @@ Page {
                         theme: root.theme
                     }
                     SpinBox {
+                        Layout.fillWidth: true
                         from: 0
                         to: 8
                         value: root.newUvFunctionType
@@ -666,12 +720,7 @@ Page {
                     }
                 }
 
-                GridLayout {
-                    Layout.fillWidth: true
-                    columns: 2
-                    columnSpacing: 10
-                    rowSpacing: 10
-
+                ActionGrid {
                     ActionButton {
                         text: "Set XY"
                         theme: root.theme

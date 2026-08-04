@@ -3,7 +3,7 @@
 set -euo pipefail
 
 BUILD_DIR="${BUILD_DIR:-build-android}"
-AVD_NAME="${AVD_NAME:-PrintFlow_Pixel}"
+AVD_NAME="${AVD_NAME:-PrintFlow_Pixel_1080p}"
 PACKAGE_NAME="${PACKAGE_NAME:-com.ripapp.printer}"
 ACTIVITY_NAME="${ACTIVITY_NAME:-org.qtproject.qt.android.bindings.QtActivity}"
 STREAM_LOGCAT="${STREAM_LOGCAT:-0}"

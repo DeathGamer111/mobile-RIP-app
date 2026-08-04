@@ -18,6 +18,7 @@ Modes:
   --test                  Configure, build, and run the local CTest suite
   --android-setup         Install or repair Android SDK, NDK, emulator, and Qt Android kits
   --android               Build, install, and launch the Android APK on the emulator
+  --android-device        Build, install, and launch the Android APK on a USB device
 
 Theme options:
   --theme default|nocai|xante
@@ -30,6 +31,7 @@ Environment:
 Legacy aliases:
   --android-build         Build the Android APK only
   --android-run           Same as --android
+  --android-device-run    Same as --android-device
   --android-setup-build   Install Android dependencies, then build the APK
   --setup-android-deps    Same as --android-setup-build
   --skip-android-deps     Same as --linux
@@ -55,6 +57,9 @@ for arg in "$@"; do
             ;;
         --android)
             mode="android"
+            ;;
+        --android-device|--android-device-run)
+            mode="android-device"
             ;;
         --android-build)
             mode="android-build"
@@ -95,6 +100,7 @@ Select PrintFlow build target:
   2) Local test suite
   3) Android setup / repair environment
   4) Android build + install + run on emulator
+  5) Android build + install + run on USB device
   q) Quit
 EOF
     printf 'Choice [1]: '
@@ -105,6 +111,7 @@ EOF
         2) mode="test" ;;
         3) mode="android-setup" ;;
         4) mode="android" ;;
+        5) mode="android-device" ;;
         q|Q) exit 0 ;;
         *) printf 'Unknown choice: %s\n' "${reply}" >&2; exit 1 ;;
     esac
@@ -114,7 +121,7 @@ EOF
 
 needs_theme_selection() {
     case "$1" in
-        linux|android|android-build|android-setup-build) return 0 ;;
+        linux|android|android-device|android-build|android-setup-build) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -225,6 +232,9 @@ case "${mode}" in
         ;;
     android)
         exec "${SCRIPT_DIR}/scripts/android_build_install_run.sh" "${pass_args[@]}"
+        ;;
+    android-device)
+        ANDROID_TARGET=device exec "${SCRIPT_DIR}/scripts/android_build_install_run.sh" "${pass_args[@]}"
         ;;
     android-setup-build)
         PRINTFLOW_ANDROID_SETUP_ASSUME_YES=1 "${SCRIPT_DIR}/scripts/install_android_dependencies.sh"

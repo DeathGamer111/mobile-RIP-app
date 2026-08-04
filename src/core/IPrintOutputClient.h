@@ -2,8 +2,15 @@
 
 #include <QString>
 
+#include <array>
 #include <cstdint>
 #include <vector>
+
+enum class DirectPrintRasterFormat : uint8_t
+{
+    Unspecified = 0,
+    NocaiX33Standard = 1
+};
 
 struct DirectPrintSettings
 {
@@ -12,6 +19,8 @@ struct DirectPrintSettings
     int printSpeed = 1;
     int wcSequence = 0;
     int eclosionGrade = 0;
+    // CPrinter_Model_X33 initializes as the generic two-head configuration,
+    // which its legacy settings translation maps to selection 0.
     int headSelect = 0;
     int whiteInkPercent = 0;
     int whiteInkPassCount = 0;
@@ -24,9 +33,15 @@ struct DirectPrintSettings
     int disableUv3 = 0;
     int disableUv4 = 0;
     int disableUv5 = 0;
-    int carReset = 1;
-    int stripBlank = 1;
+    int carReset = 0;
+    int stripBlank = 0;
     int blankDistance = 0;
+    // Per-job print origin in whole millimeters. Job Details and Imposition
+    // both persist this same job offset. The X-33 adapter converts it to the
+    // controller's uint32 hundredths-of-a-millimeter representation.
+    int printOffsetXmm = 0;
+    int printOffsetYmm = 0;
+    double mediaHeightMm = -1.0;
     int pass = 0;
     int vsdMode = 0;
 };
@@ -40,6 +55,10 @@ struct DirectPrintRaster
     int xdpi = 0;
     int ydpi = 0;
     int bytesPerLine = 0;
+    DirectPrintRasterFormat format = DirectPrintRasterFormat::Unspecified;
+    // Populated only for NocaiX33Standard. These are the exact 48 bytes that
+    // the working legacy PRN writer would place before the same packed lines.
+    std::array<uint32_t, 12> canonicalHeader{};
 };
 
 class IPrintOutputClient

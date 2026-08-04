@@ -1,8 +1,11 @@
 #include "MultiInkScreenEngine.h"
 #include "MultiInkToneBuilder.h"
 #include "PrintJobMultiInk.h"
+#include "ColorManagementManager.h"
+#include "X33WhiteToneBuilder.h"
 
 #include <QtTest/QtTest>
+#include <QStandardPaths>
 
 #include <Magick++.h>
 
@@ -17,7 +20,10 @@ private slots:
     void multiInkModeValidationFallsBackToFourColor();
     void toneBuilderRejectsMissingCmykInput();
     void toneBuilderBuildsTinySyntheticChannels();
+    void x33WhiteToneBuilderSupportsJobStrategies();
     void screenEngineValidatesRequestsAndClampsParameters();
+    void directPrintSdkFamiliesAreSeparated();
+    void selectedPrinterPersistsWhenSetupIsSaved();
 };
 
 void RipPipelineTest::initTestCase()
@@ -95,6 +101,59 @@ void RipPipelineTest::toneBuilderBuildsTinySyntheticChannels()
     }));
 }
 
+void RipPipelineTest::x33WhiteToneBuilderSupportsJobStrategies()
+{
+    bool recognized = false;
+    QCOMPARE(
+        X33WhiteToneBuilder::modeFromJob(QStringLiteral("Auto Underbase"), &recognized),
+        X33WhiteToneBuilder::Mode::AutoUnderbase);
+    QVERIFY(recognized);
+    QCOMPARE(
+        X33WhiteToneBuilder::modeFromJob(QStringLiteral("White Plate"), &recognized),
+        X33WhiteToneBuilder::Mode::Plate);
+    QVERIFY(recognized);
+
+    const std::array<std::vector<uint8_t>, 4> cmyk = {{
+        {0, 10, 20, 30},
+        {0, 40, 15, 10},
+        {0, 20, 80, 20},
+        {0, 30, 25, 120}
+    }};
+
+    X33WhiteToneBuilder::BuildRequest request;
+    request.cmykTones = &cmyk;
+    request.width = 2;
+    request.height = 2;
+    request.mode = X33WhiteToneBuilder::Mode::AutoUnderbase;
+    request.threshold = 0;
+    request.density = 255;
+
+    std::vector<uint8_t> white;
+    QVERIFY(X33WhiteToneBuilder::build(request, white));
+    QCOMPARE(white, std::vector<uint8_t>({0, 40, 80, 120}));
+
+    request.mode = X33WhiteToneBuilder::Mode::Flood;
+    request.density = 123;
+    QVERIFY(X33WhiteToneBuilder::build(request, white));
+    QCOMPARE(white, std::vector<uint8_t>({123, 123, 123, 123}));
+
+    request.mode = X33WhiteToneBuilder::Mode::Plate;
+    request.density = 255;
+    request.platePath = QStringLiteral("plate.png");
+    QVERIFY(X33WhiteToneBuilder::build(
+        request,
+        white,
+        [](const QString& path, std::vector<uint8_t>& plate, int width, int height) {
+            if (path != QStringLiteral("plate.png") || width != 2 || height != 2)
+                return false;
+            plate = {0, 64, 128, 255};
+            return true;
+        }));
+    QCOMPARE(white, std::vector<uint8_t>({0, 64, 128, 255}));
+
+    QVERIFY(!X33WhiteToneBuilder::build(request, white));
+}
+
 void RipPipelineTest::screenEngineValidatesRequestsAndClampsParameters()
 {
     MultiInkScreenEngine::AllPackedLines packed;
@@ -137,6 +196,33 @@ void RipPipelineTest::screenEngineValidatesRequestsAndClampsParameters()
     QCOMPARE(packed[0].size(), size_t(2));
     QCOMPARE(packed[0][0].size(), size_t(4));
     QCOMPARE(packed[0][1].size(), size_t(4));
+}
+
+void RipPipelineTest::directPrintSdkFamiliesAreSeparated()
+{
+    ColorManagementManager manager;
+    QCOMPARE(manager.directPrintSdkFamilyForPrinter(QStringLiteral("X-33")),
+             QStringLiteral("legacy-cmyk"));
+    QCOMPARE(manager.directPrintSdkFamilyForPrinter(QStringLiteral("X-36NC (Photo Printer)")),
+             QStringLiteral("multi-ink"));
+    QVERIFY(manager.directPrintSdkFamilyForPrinter(QStringLiteral("Unknown")).isEmpty());
+}
+
+void RipPipelineTest::selectedPrinterPersistsWhenSetupIsSaved()
+{
+    QStandardPaths::setTestModeEnabled(true);
+
+    ColorManagementManager writer;
+    writer.resetToDefaults();
+    writer.setSelectedPrinter(QStringLiteral("X-36NC (Photo Printer)"));
+    QVERIFY(writer.save());
+
+    ColorManagementManager reader;
+    QVERIFY(reader.load());
+    QCOMPARE(reader.selectedPrinter(), QStringLiteral("X-36NC (Photo Printer)"));
+
+    reader.resetToDefaults();
+    QVERIFY(reader.save());
 }
 
 QTEST_GUILESS_MAIN(RipPipelineTest)

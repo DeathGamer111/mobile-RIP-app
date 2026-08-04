@@ -88,8 +88,8 @@ static QVariantMap defaultDirectPrintSettings() {
     m["disableUv3"] = 0;
     m["disableUv4"] = 0;
     m["disableUv5"] = 0;
-    m["carReset"] = 1;
-    m["stripBlank"] = 1;
+    m["carReset"] = 0;
+    m["stripBlank"] = 0;
     m["blankDistance"] = 0;
     m["pass"] = 0;
     m["vsdMode"] = 0;
@@ -324,6 +324,38 @@ void ColorManagementManager::setDirectPrintSdkRootPath(const QString& path) {
     m_directPrintSdkRootPath = clean;
     emit directPrintSettingsChanged();
     save();
+}
+
+QString ColorManagementManager::multiInkDirectPrintSdkRootPath() const {
+    return m_multiInkDirectPrintSdkRootPath;
+}
+
+
+void ColorManagementManager::setMultiInkDirectPrintSdkRootPath(const QString& path) {
+    const QString clean = path.trimmed();
+    if (m_multiInkDirectPrintSdkRootPath == clean)
+        return;
+
+    m_multiInkDirectPrintSdkRootPath = clean;
+    emit directPrintSettingsChanged();
+    save();
+}
+
+
+QString ColorManagementManager::directPrintSdkFamilyForPrinter(const QString& printerName) const {
+    const QString name = printerName.trimmed();
+    if (name.compare(QStringLiteral("X-33"), Qt::CaseInsensitive) == 0)
+        return QStringLiteral("legacy-cmyk");
+    if (name.compare(QStringLiteral("X-36NC (Photo Printer)"), Qt::CaseInsensitive) == 0)
+        return QStringLiteral("multi-ink");
+    return QString();
+}
+
+
+QString ColorManagementManager::directPrintSdkRootForPrinter(const QString& printerName) const {
+    return directPrintSdkFamilyForPrinter(printerName) == QStringLiteral("multi-ink")
+        ? m_multiInkDirectPrintSdkRootPath
+        : m_directPrintSdkRootPath;
 }
 
 
@@ -859,6 +891,8 @@ bool ColorManagementManager::load() {
 
     const auto o = doc.object();
 
+    m_selectedPrinter = o.value("selectedPrinter").toString(m_selectedPrinter).trimmed();
+
     // Profiles
     m_defaultInputProfile  = o.value("defaultInputProfile").toString(m_defaultInputProfile);
     m_defaultOutputProfile = o.value("defaultOutputProfile").toString(m_defaultOutputProfile);
@@ -885,6 +919,8 @@ bool ColorManagementManager::load() {
         ? "direct"
         : "prn";
     m_directPrintSdkRootPath = o.value("directPrintSdkRootPath").toString(m_directPrintSdkRootPath).trimmed();
+    m_multiInkDirectPrintSdkRootPath =
+        o.value("multiInkDirectPrintSdkRootPath").toString(m_multiInkDirectPrintSdkRootPath).trimmed();
     m_directPrintSettings = normalizedDirectPrintSettings(
         jsonObjectToVariantMap(o.value("directPrintSettings").toObject()));
 
@@ -951,6 +987,8 @@ bool ColorManagementManager::load() {
 bool ColorManagementManager::save() {
     QJsonObject o;
 
+    o["selectedPrinter"] = m_selectedPrinter;
+
     // Profiles
     o["defaultInputProfile"]  = m_defaultInputProfile;
     o["defaultOutputProfile"] = m_defaultOutputProfile;
@@ -975,6 +1013,7 @@ bool ColorManagementManager::save() {
     // Direct print settings
     o["multiInkOutputMode"] = m_multiInkOutputMode;
     o["directPrintSdkRootPath"] = m_directPrintSdkRootPath;
+    o["multiInkDirectPrintSdkRootPath"] = m_multiInkDirectPrintSdkRootPath;
     o["directPrintSettings"] = variantMapToJsonObject(normalizedDirectPrintSettings(m_directPrintSettings));
     
 	// Family default linearization XML paths
@@ -1037,6 +1076,7 @@ bool ColorManagementManager::save() {
 
 
 void ColorManagementManager::resetToDefaults() {
+    m_selectedPrinter = QStringLiteral("X-33");
     // Profiles
     m_defaultInputProfile.clear();
     m_defaultOutputProfile.clear();
@@ -1060,6 +1100,7 @@ void ColorManagementManager::resetToDefaults() {
 
     m_multiInkOutputMode = "prn";
     m_directPrintSdkRootPath.clear();
+    m_multiInkDirectPrintSdkRootPath.clear();
     m_directPrintSettings = defaultDirectPrintSettings();
     
     // Linearization

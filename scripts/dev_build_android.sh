@@ -12,10 +12,28 @@ GRADLE_OPTS="${GRADLE_OPTS:-} -Djava.net.preferIPv4Stack=true -Dorg.gradle.daemo
 export GRADLE_USER_HOME
 export GRADLE_OPTS
 
+CALLER_ANDROID_ABI="${ANDROID_ABI}"
+CALLER_BUILD_DIR="${BUILD_DIR}"
+CALLER_QT_ANDROID_CMAKE="${QT_ANDROID_CMAKE:-}"
+CALLER_QT_HOST_PATH="${QT_HOST_PATH:-}"
+CALLER_ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-}"
+CALLER_ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-}"
+CALLER_DIRECT_PRINT_SDK_ROOT="${DIRECT_PRINT_SDK_ROOT:-}"
+CALLER_DIRECT_PRINT_SDK_ARCHIVE="${DIRECT_PRINT_SDK_ARCHIVE:-}"
+
 if [[ -f "${ANDROID_ENV_FILE}" ]]; then
     # shellcheck disable=SC1090
     source "${ANDROID_ENV_FILE}"
 fi
+
+ANDROID_ABI="${CALLER_ANDROID_ABI}"
+BUILD_DIR="${CALLER_BUILD_DIR}"
+[[ -n "${CALLER_QT_ANDROID_CMAKE}" ]] && QT_ANDROID_CMAKE="${CALLER_QT_ANDROID_CMAKE}"
+[[ -n "${CALLER_QT_HOST_PATH}" ]] && QT_HOST_PATH="${CALLER_QT_HOST_PATH}"
+[[ -n "${CALLER_ANDROID_SDK_ROOT}" ]] && ANDROID_SDK_ROOT="${CALLER_ANDROID_SDK_ROOT}"
+[[ -n "${CALLER_ANDROID_NDK_ROOT}" ]] && ANDROID_NDK_ROOT="${CALLER_ANDROID_NDK_ROOT}"
+[[ -n "${CALLER_DIRECT_PRINT_SDK_ROOT}" ]] && DIRECT_PRINT_SDK_ROOT="${CALLER_DIRECT_PRINT_SDK_ROOT}"
+[[ -n "${CALLER_DIRECT_PRINT_SDK_ARCHIVE}" ]] && DIRECT_PRINT_SDK_ARCHIVE="${CALLER_DIRECT_PRINT_SDK_ARCHIVE}"
 
 fail() {
     printf 'error: %s\n' "$1" >&2
@@ -62,6 +80,35 @@ infer_qt_host_path() {
     done
 }
 
+qt_target_for_abi() {
+    case "$1" in
+        x86_64) printf 'android_x86_64' ;;
+        arm64-v8a) printf 'android_arm64_v8a' ;;
+        *) return 1 ;;
+    esac
+}
+
+adjust_qt_android_cmake_for_abi() {
+    local target qt_bin qt_target_dir qt_version_dir candidate
+
+    target="$(qt_target_for_abi "${ANDROID_ABI}" || true)"
+    [[ -n "${target}" && -n "${QT_ANDROID_CMAKE:-}" ]] || return
+    [[ "${QT_ANDROID_CMAKE}" != *"/${target}/"* ]] || return
+
+    qt_bin="$(dirname "${QT_ANDROID_CMAKE}")"
+    qt_target_dir="$(dirname "${qt_bin}")"
+    qt_version_dir="$(dirname "${qt_target_dir}")"
+    candidate="${qt_version_dir}/${target}/bin/qt-cmake"
+
+    if [[ -x "${candidate}" ]]; then
+        printf 'Switching Qt Android kit for ABI %s: %s\n' "${ANDROID_ABI}" "${candidate}"
+        QT_ANDROID_CMAKE="${candidate}"
+        export QT_ANDROID_CMAKE
+    fi
+}
+
+adjust_qt_android_cmake_for_abi
+
 [[ -n "${QT_ANDROID_CMAKE:-}" ]] || fail "Set QT_ANDROID_CMAKE to the Qt Android qt-cmake path, for example ~/Qt/6.x.x/android_arm64_v8a/bin/qt-cmake"
 require_path "QT_ANDROID_CMAKE" "${QT_ANDROID_CMAKE}"
 if [[ -z "${QT_HOST_PATH:-}" ]]; then
@@ -90,15 +137,12 @@ require_command adb
 require_command emulator
 mkdir -p "${GRADLE_USER_HOME}"
 
-if [[ -n "${DIRECT_PRINT_SDK_ROOT:-}" && "${ANDROID_ABI}" == "arm64-v8a" ]]; then
+if [[ -n "${DIRECT_PRINT_SDK_ROOT:-}" ]]; then
     require_path "DIRECT_PRINT_SDK_ROOT" "${DIRECT_PRINT_SDK_ROOT}"
-    if [[ ! -f "${DIRECT_PRINT_SDK_ROOT}/libSYPrintAPIforPROII.so" ]]; then
-        fail "DIRECT_PRINT_SDK_ROOT must contain libSYPrintAPIforPROII.so for Android packaging"
-    fi
-elif [[ -n "${DIRECT_PRINT_SDK_ROOT:-}" ]]; then
-    printf 'warning: DIRECT_PRINT_SDK_ROOT is set, but direct-print SDK packaging is only enabled for ANDROID_ABI=arm64-v8a. Current ABI: %s\n' "${ANDROID_ABI}" >&2
+elif [[ -n "${DIRECT_PRINT_SDK_ARCHIVE:-}" ]]; then
+    require_path "DIRECT_PRINT_SDK_ARCHIVE" "${DIRECT_PRINT_SDK_ARCHIVE}"
 else
-    printf 'warning: DIRECT_PRINT_SDK_ROOT is not set; APK will build without the direct-print SDK library.\n' >&2
+    printf 'warning: no direct-print SDK root or archive is set; APK will build without the direct-print SDK library.\n' >&2
 fi
 
 mapfile -t THEME_CMAKE_ARGS < <(theme_cmake_args)

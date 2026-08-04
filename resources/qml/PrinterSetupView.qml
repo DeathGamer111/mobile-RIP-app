@@ -15,7 +15,7 @@ Page {
     // Tracks which ICC dropdown to update after a file is chosen.
     property string iccDialogTarget: "output" // "output" | "inputCMYK" | "deviceLink"
     property string linearizationDialogTarget: "printerLinearization"
-    property string sdkConnectionState: "notConnected"
+    property string sdkConnectionState: nocaiDirectPrint.connected ? "connected" : "notConnected"
     property string sdkSelectedPrinterName: ""
     property var sdkPrinterStatusInfo: ({})
     property var sdkPrinterFirmwareInfo: ({})
@@ -24,7 +24,7 @@ Page {
     ListModel { id: iccProfileModel }
     ListModel { id: deviceLinkModel }
     ListModel { id: sdkPrinterModel }
-    
+
     property bool _syncingTabs: false
 
     // Static capability map used for the simulated Nocai devices.
@@ -78,25 +78,57 @@ Page {
                && appState.selectedPrinter === "X-36NC (Photo Printer)"
     }
 
+    function isSdkCapablePrinter() {
+        return appState.usingSimulatedPrinter
+               && (appState.selectedPrinter === "X-33"
+                   || appState.selectedPrinter === "X-36NC (Photo Printer)")
+    }
+
     function setDirectSetting(key, value) {
         colorManager.setDirectPrintSetting(key, value)
     }
 
+    function setSelectedSdkRoot(path) {
+        if (appState.directPrintSdkFamily() === "multi-ink")
+            colorManager.setMultiInkDirectPrintSdkRootPath(path)
+        else
+            colorManager.setDirectPrintSdkRootPath(path)
+        appState.configureDirectPrintSdk()
+    }
+
     function refreshSdkPrinters() {
         sdkPrinterModel.clear()
-        nocaiDirectPrint.sdkRootPath = colorManager.directPrintSdkRootPath
+        appState.configureDirectPrintSdk()
         const ok = nocaiDirectPrint.refreshPrinters()
         const printers = nocaiDirectPrint.printers
         for (let i = 0; i < printers.length; ++i)
             sdkPrinterModel.append(printers[i])
 
+        if (ok && sdkPrinterModel.count === 1) {
+            const onlyPrinter = sdkPrinterModel.get(0)
+            appState.sdkSelectedPrinterIndex = onlyPrinter.index
+            sdkSelectedPrinterName = onlyPrinter.name
+            setDirectSetting("selectedPrinterIndex", onlyPrinter.index)
+            nocaiDirectPrint.choosePrinter(onlyPrinter.index)
+        }
+
         syncSdkPrinterCombo()
         toast.show(ok ? "SDK printer list refreshed." : "SDK unavailable: " + nocaiDirectPrint.lastError)
+        return ok
     }
 
     function connectSdkPrinter() {
-        if (appState.sdkSelectedPrinterIndex >= 0)
-            nocaiDirectPrint.choosePrinter(appState.sdkSelectedPrinterIndex)
+        // Always begin with a fresh search. The vendor SDK requires the
+        // Search -> Select -> Connect order in each application process.
+        if (!refreshSdkPrinters())
+            return
+
+        if (appState.sdkSelectedPrinterIndex >= 0
+                && !nocaiDirectPrint.choosePrinter(appState.sdkSelectedPrinterIndex)) {
+            sdkConnectionState = "failed"
+            toast.show("Printer selection failed: " + nocaiDirectPrint.lastError)
+            return
+        }
 
         const ok = nocaiDirectPrint.connectPrinter()
         sdkConnectionState = ok ? "connected" : "failed"
@@ -160,7 +192,7 @@ Page {
 		    backend.setDefaultOutputICCProfile(resolved)
 		}
 	}
-	
+
 	function currentFamilyKey() {
 		return colorManager.outputProfileFamilyForInkMode(currentOutputProfileInkMode())
 	}
@@ -187,6 +219,7 @@ Page {
 
 		    const isMultiInk = (selected === "X-36NC (Photo Printer)")
 		    appState.usingMultiInkPrinter = isMultiInk
+            appState.configureDirectPrintSdk()
 
 		    // Choose backend and ensure assets/ICC are ready
 		    let backend
@@ -309,24 +342,33 @@ Page {
             syncSdkPrinterCombo()
 	}
 
+    function goBack() {
+        if (root.stackView && root.stackView.depth > 1) {
+            root.stackView.pop()
+            return
+        }
+
+        if (StackView.view)
+            StackView.view.pop()
+    }
+
     function doSave() {
         if (!hasPrinterSelected()) return
+        colorManager.selectedPrinter = appState.selectedPrinter
+        colorManager.save()
         toast.show("Printer setup complete: " + appState.selectedPrinter)
-        stackView.pop()
+        goBack()
     }
 
 	Component.onCompleted: {
 		printJobOutput.refreshDetectedPrinters()
 
-		// App defaults: X-36NC Photo Printer + 10-color MultiInk
+        // App defaults: X-33 using the legacy standard-CMYK SDK path.
 		if (!appState.selectedPrinter || appState.selectedPrinter.length === 0) {
-		    appState.selectedPrinter = "X-36NC (Photo Printer)"
+		    appState.selectedPrinter = "X-33"
 		    appState.usingSimulatedPrinter = true
-		    appState.usingMultiInkPrinter = true
-		    appState.multiInkInkMode = 10
-
-		    printJobMultiInk.setInkMode(10)
-		    printJobMultiInk.enableDefaultInputCMYK(true)
+		    appState.usingMultiInkPrinter = false
+		    printJobCMYK.enableDefaultInputCMYK(true)
 		}
 
 		_syncingTabs = true
@@ -363,10 +405,10 @@ Page {
             ThemedButton {
                 text: strings.trKey("common.back")
                 theme: root.theme
-                Layout.preferredWidth: 88
+                Layout.preferredWidth: root.theme.headerButtonWidth(root.width)
                 padding: 12
                 font.pixelSize: 15
-                onClicked: root.stackView.pop()
+                onClicked: root.goBack()
             }
 
             Item { Layout.fillWidth: true }
@@ -374,9 +416,12 @@ Page {
             Label {
                 text: strings.trKey("printerSetup.title")
                 color: theme.text
-                font.pixelSize: 20
+                font.pixelSize: root.theme.headerTitleSize(root.width)
                 font.weight: Font.Medium
                 horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 Layout.alignment: Qt.AlignVCenter
             }
 
@@ -385,7 +430,7 @@ Page {
             ThemedButton {
                 text: "Save"
                 theme: root.theme
-                Layout.preferredWidth: 88
+                Layout.preferredWidth: root.theme.headerButtonWidth(root.width)
                 padding: 12
                 font.pixelSize: 15
                 enabled: hasPrinterSelected()
@@ -400,7 +445,7 @@ Page {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.margins: 12
+        anchors.margins: theme.pageMargin
         contentWidth: availableWidth
         clip: true
 
@@ -425,7 +470,7 @@ Page {
 
                 ColumnLayout {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    width: Math.min(parent.width, 520)
+                    width: theme.boundedWidth(parent.width, 520)
                     spacing: 12
 
                     Label {
@@ -464,6 +509,7 @@ Page {
 
                         // --- Tab 0: Nocai (simulated) printers ---
                         ColumnLayout {
+                            id: nocaiTab
                             spacing: 10
                             Layout.fillWidth: true
 
@@ -487,10 +533,12 @@ Page {
                                     if (!selected || selected.length <= 0) return
 
                                     appState.selectedPrinter = selected
+                                    colorManager.selectedPrinter = selected
                                     appState.usingSimulatedPrinter = true
 
                                     const isMultiInk = (selected === "X-36NC (Photo Printer)")
                                     appState.usingMultiInkPrinter = isMultiInk
+                                    appState.configureDirectPrintSdk()
 
 									if (isMultiInk) {
 										const validModes = [4, 5, 6, 7, 8, 10]
@@ -576,18 +624,11 @@ Page {
                             }
 
 	                            ColumnLayout {
-	                                visible: root.isX36MultiInk()
+	                                visible: root.isSdkCapablePrinter()
 	                                Layout.fillWidth: true
 	                                spacing: 10
 
 	                                Rectangle { height: 1; Layout.fillWidth: true; color: theme.divider; opacity: 0.8 }
-
-	                                Label {
-	                                    text: strings.trKey("printerSetup.directPrintSdk")
-	                                    color: theme.text
-	                                    font.bold: true
-	                                    Layout.alignment: Qt.AlignHCenter
-	                                }
 
 	                                Label {
 	                                    text: strings.trKey("printerSetup.outputMode")
@@ -627,7 +668,9 @@ Page {
 
                                 Label {
                                     text: appState.multiInkOutputMode === "direct"
-                                          ? "Direct mode streams the MultiInk raster to the Nocai SDK."
+                                          ? (root.isX36MultiInk()
+                                             ? "Direct mode uses the separately configured newer-model SDK."
+                                             : "Direct mode streams the standard CMYK raster to the X-33 SDK.")
                                           : "PRN mode saves a file for testing and debugging."
 	                                    color: theme.subtext
 	                                    wrapMode: Text.WordWrap
@@ -635,9 +678,114 @@ Page {
 	                                    horizontalAlignment: Text.AlignHCenter
 	                                }
 
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 10
+
+                            }
+                        }
+
+                        // --- Tab 1: Network printers ---
+                        ColumnLayout {
+                            id: networkTab
+                            spacing: 10
+                            Layout.fillWidth: true
+
+                            Label {
+                                text: strings.trKey("printerSetup.selectNetworkPrinter")
+                                color: theme.text
+                                font.weight: Font.Medium
+                            }
+
+                            ComboBox {
+                                id: printerComboBox
+                                Layout.fillWidth: true
+                                model: printJobOutput.detectedPrinters
+
+                                onActivated: {
+                                    const name = currentText
+                                    if (printJobOutput.loadPrinter(name)) {
+                                        appState.selectedPrinter = name
+                                        appState.usingSimulatedPrinter = false
+                                        appState.usingMultiInkPrinter = false
+
+                                        // Warm the backend capability lists
+                                        printJobOutput.supportedResolutions()
+                                        printJobOutput.supportedMediaSizes()
+                                        printJobOutput.supportedDuplexModes()
+                                        printJobOutput.supportedColorModes()
+
+                                        toast.show("Network printer loaded: " + name)
+                                    } else {
+                                        toast.show("Failed to load printer: " + name)
+                                    }
+                                }
+                            }
+
+                            ThemedButton {
+                                text: strings.trKey("printerSetup.refreshList")
+                                theme: root.theme
+                                padding: 12
+                                font.pixelSize: 15
+                                onClicked: printJobOutput.refreshDetectedPrinters()
+                            }
+                        }
+
+		                    }
+		                }
+		            }
+
+
+            // =========================
+            // Direct Print SDK
+            // =========================
+            Pane {
+                Layout.fillWidth: true
+                padding: 12
+                visible: root.isSdkCapablePrinter() && appState.multiInkOutputMode === "direct"
+
+                background: Rectangle {
+                    color: theme.surface
+                    radius: 12
+                    border.width: 1
+                    border.color: theme.divider
+                }
+
+                ColumnLayout {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: theme.boundedWidth(parent.width, 520)
+                    spacing: 10
+
+                                    Rectangle { height: 1; Layout.fillWidth: true; color: theme.divider; opacity: 0.65 }
+
+                                    Label {
+                                        text: strings.trKey("printerSetup.directPrintSdk")
+                                        color: theme.text
+                                        font.bold: true
+                                        Layout.alignment: Qt.AlignHCenter
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: appState.directPrintSdkFamily() === "multi-ink"
+                                              ? "New-model MultiInk SDK folder"
+                                              : "Legacy X-33 SDK folder (blank uses packaged SDK)"
+                                        color: theme.subtext
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    TextField {
+                                        id: sdkRootField
+                                        Layout.fillWidth: true
+                                        text: colorManager.directPrintSdkRootForPrinter(appState.selectedPrinter)
+                                        placeholderText: appState.directPrintSdkFamily() === "multi-ink"
+                                                         ? "/path/to/new-model/sdk"
+                                                         : "(auto-discover packaged X-33 SDK)"
+                                        onEditingFinished: root.setSelectedSdkRoot(text.trim())
+                                    }
+
+                                    GridLayout {
+                                        Layout.fillWidth: true
+                                        columns: theme.gridColumns(width, 2, 150)
+                                        columnSpacing: 10
+                                        rowSpacing: 10
 
 	                                    ThemedButton {
 	                                        text: strings.trKey("printerSetup.refreshSdkPrinters")
@@ -651,6 +799,9 @@ Page {
 	                                        text: nocaiDirectPrint.available ? strings.trKey("printerSetup.sdkReady") : strings.trKey("printerSetup.sdkUnavailable")
 	                                        color: nocaiDirectPrint.available ? theme.accent : theme.warning
 	                                        Layout.alignment: Qt.AlignVCenter
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 0
+                                            wrapMode: Text.WordWrap
 	                                    }
 	                                }
 
@@ -671,15 +822,17 @@ Page {
 	                                    }
 	                                }
 
-	                                RowLayout {
+	                                GridLayout {
 	                                    Layout.alignment: Qt.AlignHCenter
-	                                    Layout.preferredWidth: Math.min(parent.width, 370)
-	                                    spacing: 10
+	                                    Layout.fillWidth: true
+	                                    columns: theme.gridColumns(width, 2, 150)
+	                                    columnSpacing: 10
+	                                    rowSpacing: 10
 
 	                                    ThemedButton {
 	                                        text: root.sdkConnectionState === "connected" ? strings.trKey("common.connected") : strings.trKey("common.connect")
 	                                        theme: root.theme
-	                                        Layout.preferredWidth: 180
+	                                        Layout.fillWidth: true
 	                                        Layout.preferredHeight: 40
 	                                        background: Rectangle {
 	                                            radius: 6
@@ -693,7 +846,7 @@ Page {
 	                                    ThemedButton {
 	                                        text: strings.trKey("printerSetup.refreshStatus")
 	                                        theme: root.theme
-	                                        Layout.preferredWidth: 180
+	                                        Layout.fillWidth: true
 	                                        Layout.preferredHeight: 40
 	                                        onClicked: root.refreshSdkStatusAndInfo()
 	                                    }
@@ -711,20 +864,16 @@ Page {
 	                                    horizontalAlignment: Text.AlignLeft
 	                                }
 
-                                Item {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: sdkSettingsGrid.implicitHeight
-
                                     GridLayout {
                                         id: sdkSettingsGrid
-                                        anchors.horizontalCenter: parent.horizontalCenter
-                                        width: Math.min(implicitWidth, parent.width)
-                                        columns: 2
+                                        Layout.fillWidth: true
+                                        columns: theme.gridColumns(width, 2, 150)
                                         columnSpacing: 12
                                         rowSpacing: 8
 
-                                        Label { text: "Print Direction"; color: theme.text }
+                                        Label { text: "Print Direction"; color: theme.text; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                                         SpinBox {
+                                            Layout.fillWidth: true
                                             from: 0; to: 3; value: appState.sdkPrintDirection
                                             onValueModified: { appState.sdkPrintDirection = value; root.setDirectSetting("printDirection", value) }
                                         }
@@ -813,7 +962,6 @@ Page {
                                             onValueModified: { appState.sdkVsdMode = value; root.setDirectSetting("vsdMode", value) }
                                         }
                                     }
-                                }
 
 	                                Label {
 	                                    text: "Disable UV Lights"
@@ -822,15 +970,10 @@ Page {
 	                                    Layout.alignment: Qt.AlignHCenter
 	                                }
 
-                                Item {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: sdkUvGrid.implicitHeight
-
                                     GridLayout {
                                         id: sdkUvGrid
-                                        anchors.horizontalCenter: parent.horizontalCenter
-                                        width: Math.min(implicitWidth, parent.width)
-                                        columns: 2
+                                        Layout.fillWidth: true
+                                        columns: theme.gridColumns(width, 2, 150)
                                         columnSpacing: 12
                                         rowSpacing: 6
 
@@ -860,58 +1003,8 @@ Page {
                                         }
                                     }
                                 }
-                            }
-                        }
+            }
 
-                        // --- Tab 1: Network printers ---
-                        ColumnLayout {
-                            spacing: 10
-                            Layout.fillWidth: true
-
-                            Label {
-                                text: strings.trKey("printerSetup.selectNetworkPrinter")
-                                color: theme.text
-                                font.weight: Font.Medium
-                            }
-
-                            ComboBox {
-                                id: printerComboBox
-                                Layout.fillWidth: true
-                                model: printJobOutput.detectedPrinters
-
-                                onActivated: {
-                                    const name = currentText
-                                    if (printJobOutput.loadPrinter(name)) {
-                                        appState.selectedPrinter = name
-                                        appState.usingSimulatedPrinter = false
-                                        appState.usingMultiInkPrinter = false
-
-                                        // Warm the backend capability lists
-                                        printJobOutput.supportedResolutions()
-                                        printJobOutput.supportedMediaSizes()
-                                        printJobOutput.supportedDuplexModes()
-                                        printJobOutput.supportedColorModes()
-
-                                        toast.show("Network printer loaded: " + name)
-                                    } else {
-                                        toast.show("Failed to load printer: " + name)
-                                    }
-                                }
-                            }
-
-                            ThemedButton {
-                                text: strings.trKey("printerSetup.refreshList")
-                                theme: root.theme
-                                padding: 12
-                                font.pixelSize: 15
-                                onClicked: printJobOutput.refreshDetectedPrinters()
-                            }
-                        }
-
-		                    }
-		                }
-		            }
-            
             // DeviceLink controls (MultiInk only)
 			Pane {
 				Layout.fillWidth: true
@@ -927,7 +1020,7 @@ Page {
 
 				ColumnLayout {
 					anchors.horizontalCenter: parent.horizontalCenter
-					width: Math.min(parent.width, 520)
+					width: theme.boundedWidth(parent.width, 520)
 					spacing: 10
 
 					Label {
@@ -944,9 +1037,15 @@ Page {
 						Layout.fillWidth: true
 						spacing: 10
 
-						Label { text: strings.trKey("printerSetup.enableDeviceLink"); color: theme.text; Layout.fillWidth: true }
+						Label {
+						    text: strings.trKey("printerSetup.enableDeviceLink")
+						    color: theme.text
+						    wrapMode: Text.WordWrap
+						    Layout.fillWidth: true
+						}
 
 						Switch {
+                            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
 						    id: deviceLinkSwitch
 						    checked: false
 						    onToggled: {
@@ -1006,7 +1105,7 @@ Page {
 
                 ColumnLayout {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    width: Math.min(parent.width, 520)
+                    width: theme.boundedWidth(parent.width, 520)
                     spacing: 12
 
                     Label {
@@ -1058,9 +1157,15 @@ Page {
                         Layout.fillWidth: true
                         spacing: 10
 
-                        Label { text: strings.trKey("printerSetup.useDefaultInputCmyk"); color: theme.text; Layout.preferredWidth: 180 }
+                        Label {
+                            text: strings.trKey("printerSetup.useDefaultInputCmyk")
+                            color: theme.text
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                        }
 
                         Switch {
+                            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
                             id: useInputCmykSwitch
                             checked: root.activeBackend() ? root.activeBackend().checkDefaultInputCMYK() : false
                             onToggled: {
@@ -1100,7 +1205,7 @@ Page {
                             onClicked: { iccDialogTarget = "inputCMYK"; iccUploadDialog.open() }
                         }
                     }
-                    
+
                     Label {
 						visible: appState.usingMultiInkPrinter
 						text: strings.trKey("printerSetup.linearizationXml")
@@ -1186,7 +1291,7 @@ Page {
 							toast.show("ICC added: " + name)
 						}
                     }
-                    
+
                     FileDialog {
 						id: linearizationUploadDialog
 						title: "Select Linearization XML"
@@ -1226,7 +1331,7 @@ Page {
 
                 ColumnLayout {
 					anchors.horizontalCenter: parent.horizontalCenter
-					width: Math.min(parent.width, 640)
+					width: theme.boundedWidth(parent.width, 640)
 					spacing: 10
 
                     Label {

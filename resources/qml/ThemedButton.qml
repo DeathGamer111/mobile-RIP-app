@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 
 Button {
     id: btn
@@ -8,6 +9,8 @@ Button {
     required property Theme theme
 
 	hoverEnabled: true
+    clip: true
+    Layout.minimumWidth: 0
     font.pixelSize: 13
     padding: 10
 
@@ -35,9 +38,10 @@ Button {
 	contentItem: Label {
         text: btn.text
 		color: btn.enabled ? btn.theme.text : btn.theme.subtext
+        width: btn.availableWidth
+        clip: true
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
     }
 }
-
