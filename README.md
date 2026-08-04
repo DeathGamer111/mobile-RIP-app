@@ -284,14 +284,6 @@ Additional project documentation is in `docs/`:
 - `docs/RIP-APP_Flowchart.png`
 - `docs/README.md`
 
-## GitHub About
-
-Suggested repository description:
-
-```text
-Linux and Android Qt RIP application for preparing print jobs, previewing/editing artwork, managing printer settings, and generating raster/PRN output through pluggable vendor backends.
-```
-
 ## License
 
 MIT License. See `LICENSE`.
