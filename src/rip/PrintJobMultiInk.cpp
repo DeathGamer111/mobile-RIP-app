@@ -539,8 +539,13 @@ bool PrintJobMultiInk::prepareJobForOutput(const QVariantMap& jobMap, const QStr
 bool PrintJobMultiInk::loadInputImage(const QString& imagePath)
 {
     try {
+        sourceAlphaMask.reset();
         const QString localPath = QUrl(imagePath).toLocalFile();
         inputImage.read(localPath.toStdString());
+        if (!sourceAlphaMask.capture(inputImage)) {
+            qWarning() << "PrintJobMultiInk: failed to preserve the source alpha channel.";
+            return false;
+        }
 
         QFileInfo fi(localPath);
         originalFilename = fi.fileName();
@@ -1025,6 +1030,10 @@ bool PrintJobMultiInk::buildRasterPayload(int xdpi, int ydpi, RasterPayload& pay
             const QString geom = QString("%1x%2!").arg(newWidth).arg(newHeight);
 
             inputImage.resize(Magick::Geometry(geom.toStdString()));
+            if (!sourceAlphaMask.resize(newWidth, newHeight)) {
+                qWarning() << "PrintJobMultiInk: failed to resize the source alpha mask.";
+                return false;
+            }
             qDebug() << "PrintJobMultiInk: rescaled to"
                      << inputImage.columns() << "x" << inputImage.rows()
                      << "for DPI" << xdpi << "x" << ydpi;
@@ -1033,6 +1042,13 @@ bool PrintJobMultiInk::buildRasterPayload(int xdpi, int ydpi, RasterPayload& pay
         auto cmykChannels = separateCMYK(inputImage);
         const int width = static_cast<int>(cmykChannels[0].columns());
         const int height = static_cast<int>(cmykChannels[0].rows());
+
+        for (Magick::Image& channel : cmykChannels) {
+            if (!sourceAlphaMask.applyTo(channel)) {
+                qWarning() << "PrintJobMultiInk: source alpha mask does not match the CMYK raster.";
+                return false;
+            }
+        }
 
 		std::vector<std::vector<uint8_t>> toneChannels;
 

@@ -208,6 +208,10 @@ bool PrintJobCMYK::buildRasterPayload(int xdpi, int ydpi, RasterPayload& payload
 			// Apply Resize to fit output DPI
 			QString resizeGeometry = QString("%1x%2!").arg(newWidth).arg(newHeight);
 			inputImage.resize(Magick::Geometry(resizeGeometry.toStdString()));
+            if (!sourceAlphaMask.resize(newWidth, newHeight)) {
+                qWarning() << "PrintJobCMYK: failed to resize the source alpha mask.";
+                return false;
+            }
 
             qDebug() << "Rescaled image for output DPI:" << xdpi << "x" << ydpi << "→" << inputImage.columns() << "x" << inputImage.rows();
         }
@@ -223,6 +227,10 @@ bool PrintJobCMYK::buildRasterPayload(int xdpi, int ydpi, RasterPayload& payload
             cmykChannels[channel].write(
                 0, 0, width, height, "I", Magick::CharPixel,
                 cmykTones[channel].data());
+            if (!sourceAlphaMask.applyTo(cmykTones[channel])) {
+                qWarning() << "PrintJobCMYK: source alpha mask does not match the CMYK raster.";
+                return false;
+            }
         }
 
         const bool whiteEnabled = x33WhiteMode != X33WhiteToneBuilder::Mode::Off;
@@ -760,8 +768,13 @@ void PrintJobCMYK::apply4x4Promotion(std::vector<std::vector<uint8_t>>& dotMap,
 // Read image and stage a temp file to work from (avoids touching originals).
 bool PrintJobCMYK::loadInputImage(const QString& imagePath) {
     try {
+        sourceAlphaMask.reset();
         QString localPath = QUrl(imagePath).toLocalFile();
         inputImage.read(localPath.toStdString());
+        if (!sourceAlphaMask.capture(inputImage)) {
+            qWarning() << "PrintJobCMYK: failed to preserve the source alpha channel.";
+            return false;
+        }
 
         QFileInfo fileInfo(localPath);
         originalFilename = fileInfo.fileName();

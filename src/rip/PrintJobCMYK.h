@@ -17,6 +17,7 @@
 #include "AssetManager.h"
 #include "ColorManagementManager.h"
 #include "IPrintOutputClient.h"
+#include "RasterAlphaMask.h"
 #include "X33WhiteToneBuilder.h"
 
 // CMYK raster pipeline: input load -> optional ICC convert -> CMYK separation ->
@@ -98,6 +99,7 @@ private:
 
     // Working images and intermediate data.
     Magick::Image inputImage;                        	// RGB input (temporary copy)
+    RasterAlphaMask sourceAlphaMask;                 // Preserved before ICC conversion.
     std::array<Magick::Image, 4> cmykChannels;       	// C, M, Y, K separated
     std::array<Magick::Image, 4> thresholdMasks;     	// Blue noise masks per channel
     std::array<std::vector<uint8_t>, 4> dotMaps;     	// Per-pixel dot class (0..3)

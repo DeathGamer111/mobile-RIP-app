@@ -72,6 +72,8 @@ add_printflow_qt_test(PrintFlowRipPipelineTest PrintFlow.Rip.PipelineValidation
     ${PROJECT_SOURCE_DIR}/src/rip/MultiInkToneBuilder.h
     ${PROJECT_SOURCE_DIR}/src/rip/MultiInkToneBuilder.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/MultiInkTypes.h
+    ${PROJECT_SOURCE_DIR}/src/rip/RasterAlphaMask.h
+    ${PROJECT_SOURCE_DIR}/src/rip/RasterAlphaMask.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/X33WhiteToneBuilder.h
     ${PROJECT_SOURCE_DIR}/src/rip/X33WhiteToneBuilder.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/PrintJobMultiInk.h
@@ -146,6 +148,8 @@ add_printflow_qt_test(PrintFlowCMYKAssetManagerTest PrintFlow.Rip.CMYKAssetManag
     ${PROJECT_SOURCE_DIR}/src/core/AssetManager.cpp
     ${PROJECT_SOURCE_DIR}/src/core/ColorManagementManager.h
     ${PROJECT_SOURCE_DIR}/src/core/ColorManagementManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/rip/RasterAlphaMask.h
+    ${PROJECT_SOURCE_DIR}/src/rip/RasterAlphaMask.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/X33WhiteToneBuilder.h
     ${PROJECT_SOURCE_DIR}/src/rip/X33WhiteToneBuilder.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/PrintJobCMYK.h

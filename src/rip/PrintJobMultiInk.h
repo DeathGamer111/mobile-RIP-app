@@ -22,6 +22,7 @@
 #include "MultiInkScreenEngine.h"
 #include "MultiInkTypes.h"
 #include "IPrintOutputClient.h"
+#include "RasterAlphaMask.h"
 
 class ColorManagementManager;
 
@@ -150,6 +151,7 @@ private:
 
     // Working images / paths
     Magick::Image inputImage;
+    RasterAlphaMask sourceAlphaMask;
     QString originalFilename;
     QString tempImagePath;
     std::unique_ptr<QTemporaryDir> tempDir;

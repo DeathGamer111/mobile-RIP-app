@@ -1,6 +1,7 @@
 #include "MultiInkScreenEngine.h"
 #include "MultiInkToneBuilder.h"
 #include "PrintJobMultiInk.h"
+#include "RasterAlphaMask.h"
 #include "ColorManagementManager.h"
 #include "X33WhiteToneBuilder.h"
 
@@ -20,6 +21,7 @@ private slots:
     void multiInkModeValidationFallsBackToFourColor();
     void toneBuilderRejectsMissingCmykInput();
     void toneBuilderBuildsTinySyntheticChannels();
+    void sourceAlphaMaskSuppressesHiddenColor();
     void x33WhiteToneBuilderSupportsJobStrategies();
     void screenEngineValidatesRequestsAndClampsParameters();
     void directPrintSdkFamiliesAreSeparated();
@@ -99,6 +101,53 @@ void RipPipelineTest::toneBuilderBuildsTinySyntheticChannels()
     QVERIFY(std::all_of(tones[9].begin(), tones[9].end(), [](uint8_t value) {
         return value > 0 && value <= 128;
     }));
+}
+
+void RipPipelineTest::sourceAlphaMaskSuppressesHiddenColor()
+{
+    const std::array<uint8_t, 8> rgba = {
+        0, 0, 0, 0,
+        20, 40, 60, 128,
+    };
+    Magick::Image source;
+    source.read(2, 1, "RGBA", Magick::CharPixel, rgba.data());
+
+    RasterAlphaMask mask;
+    QVERIFY(mask.capture(source));
+    QVERIFY(mask.isActive());
+    QCOMPARE(mask.width(), 2);
+    QCOMPARE(mask.height(), 1);
+
+    std::vector<uint8_t> tone = {255, 200};
+    QVERIFY(mask.applyTo(tone));
+    QCOMPARE(tone[0], uint8_t(0));
+    QCOMPARE(tone[1], uint8_t(100));
+
+    std::array<uint8_t, 2> grayscaleBytes = {255, 200};
+    Magick::Image grayscale(Magick::Geometry(2, 1), "black");
+    grayscale.depth(8);
+    grayscale.type(Magick::GrayscaleType);
+    grayscale.read(2, 1, "I", Magick::CharPixel, grayscaleBytes.data());
+    QVERIFY(mask.applyTo(grayscale));
+    grayscale.write(0, 0, 2, 1,
+                    "I", Magick::CharPixel, grayscaleBytes.data());
+    QCOMPARE(grayscaleBytes[0], uint8_t(0));
+    QCOMPARE(grayscaleBytes[1], uint8_t(100));
+
+    QVERIFY(mask.resize(4, 2));
+    QCOMPARE(mask.width(), 4);
+    QCOMPARE(mask.height(), 2);
+    std::vector<uint8_t> resizedTone(8, 255);
+    QVERIFY(mask.applyTo(resizedTone));
+
+    Magick::Image opaque(Magick::Geometry(2, 1), "black");
+    opaque.type(Magick::TrueColorType);
+    QVERIFY(mask.capture(opaque));
+    QVERIFY(!mask.isActive());
+
+    tone = {17, 93};
+    QVERIFY(mask.applyTo(tone));
+    QCOMPARE(tone, std::vector<uint8_t>({17, 93}));
 }
 
 void RipPipelineTest::x33WhiteToneBuilderSupportsJobStrategies()
