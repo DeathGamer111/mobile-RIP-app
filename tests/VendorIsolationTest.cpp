@@ -81,7 +81,14 @@ void VendorIsolationTest::mangledCompatibilitySymbolsAreSupported()
     // The client must mirror the vendor demo's Search -> Select -> Connect order.
     QVERIFY2(client.connectPrinter(), qPrintable(client.lastError()));
     QVERIFY(client.isConnected());
+    // Model an origin left behind by an interrupted older client. Nozzle
+    // checks must always reconcile that persistent controller state to 0,0.
+    QVERIFY2(client.setPrintXYValue(12, 34), qPrintable(client.lastError()));
     QVERIFY2(client.printNozzleCheck(), qPrintable(client.lastError()));
+    QVariantMap nozzleOrigin = client.getPrintXYValue();
+    QVERIFY2(nozzleOrigin.value("ok").toBool(), qPrintable(client.lastError()));
+    QCOMPARE(nozzleOrigin.value("xRawHundredthsMm").toULongLong(), 0ULL);
+    QCOMPARE(nozzleOrigin.value("yRawHundredthsMm").toULongLong(), 0ULL);
 
     std::vector<std::vector<std::vector<uint8_t>>> packedLines = {
         {{0x01, 0x01, 0x01, 0x01}},
@@ -126,6 +133,11 @@ void VendorIsolationTest::mangledCompatibilitySymbolsAreSupported()
     QVERIFY2(printClient.submitPreparedJob(raster, settings),
              qPrintable(printClient.lastError()));
     QVERIFY(printClient.isConnected());
+    QVariantMap restoredOrigin = printClient.getPrintXYValue();
+    QVERIFY2(restoredOrigin.value("ok").toBool(),
+             qPrintable(printClient.lastError()));
+    QCOMPARE(restoredOrigin.value("xRawHundredthsMm").toULongLong(), 0ULL);
+    QCOMPARE(restoredOrigin.value("yRawHundredthsMm").toULongLong(), 0ULL);
 
     packedLines.push_back({{0x05, 0x05, 0x05, 0x05}});
     raster.channelOrder = {2, 1, 0, 3, 4, 4};
@@ -141,6 +153,11 @@ void VendorIsolationTest::mangledCompatibilitySymbolsAreSupported()
     settings.whiteInkPassCount = 2;
     QVERIFY2(printClient.submitPreparedJob(raster, settings),
              qPrintable(printClient.lastError()));
+    restoredOrigin = printClient.getPrintXYValue();
+    QVERIFY2(restoredOrigin.value("ok").toBool(),
+             qPrintable(printClient.lastError()));
+    QCOMPARE(restoredOrigin.value("xRawHundredthsMm").toULongLong(), 0ULL);
+    QCOMPARE(restoredOrigin.value("yRawHundredthsMm").toULongLong(), 0ULL);
 #endif
 }
 

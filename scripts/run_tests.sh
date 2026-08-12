@@ -11,6 +11,7 @@ cmake_args=(
     -S "${REPO_ROOT}"
     -B "${BUILD_DIR}"
     -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
+    -DBUILD_TESTING=ON
     -DRIP_EMBED_BLUE_NOISE_MASKS=OFF
 )
 

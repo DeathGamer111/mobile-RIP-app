@@ -38,7 +38,8 @@ struct DirectPrintSettings
     int blankDistance = 0;
     // Per-job print origin in whole millimeters. Job Details and Imposition
     // both persist this same job offset. The X-33 adapter converts it to the
-    // controller's uint32 hundredths-of-a-millimeter representation.
+    // controller's uint32 hundredths-of-a-millimeter representation and must
+    // restore the controller's persistent origin to 0,0 after the job.
     int printOffsetXmm = 0;
     int printOffsetYmm = 0;
     double mediaHeightMm = -1.0;

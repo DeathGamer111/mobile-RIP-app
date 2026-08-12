@@ -10,6 +10,7 @@ class ThemeManagerTest : public QObject
 private slots:
     void builtInThemesLoad_data();
     void builtInThemesLoad();
+    void xanteThemeUsesIQueueProcessPalette();
     void selectedThemeFallsBackToDefaultForMalformedRuntimeTheme();
     void loadFromPathReportsMalformedTheme();
 };
@@ -38,6 +39,30 @@ void ThemeManagerTest::builtInThemesLoad()
     QVERIFY(manager.primaryColor().isValid());
     QVERIFY(manager.textColor().isValid());
     QVERIFY(!manager.logoPath().isEmpty());
+}
+
+void ThemeManagerTest::xanteThemeUsesIQueueProcessPalette()
+{
+    ThemeManager manager;
+    QVERIFY2(manager.loadFromPath(QStringLiteral(":/themes/xante/theme.json")),
+             qPrintable(manager.lastError()));
+
+    // Match the process-color constants used by iQueue: cyan, magenta,
+    // process black, and white. The remaining surfaces are deliberately
+    // low-chroma tints so controls remain readable in both appearance modes.
+    QCOMPARE(manager.primaryColor(), QColor(QStringLiteral("#00AEEF")));
+    QCOMPARE(manager.secondaryColor(), QColor(QStringLiteral("#EC008C")));
+    QCOMPARE(manager.accentColor(), QColor(QStringLiteral("#00AEEF")));
+
+    QCOMPARE(manager.backgroundColor(), QColor(QStringLiteral("#171415")));
+    QCOMPARE(manager.surfaceColor(), QColor(QStringLiteral("#231F1F")));
+    QCOMPARE(manager.textColor(), QColor(QStringLiteral("#FFFFFF")));
+    QCOMPARE(manager.subtextColor(), QColor(QStringLiteral("#D1D3D4")));
+
+    QCOMPARE(manager.lightBackgroundColor(), QColor(QStringLiteral("#EAF7FB")));
+    QCOMPARE(manager.lightSurfaceColor(), QColor(QStringLiteral("#FFFFFF")));
+    QCOMPARE(manager.lightSurface2Color(), QColor(QStringLiteral("#DDF2F9")));
+    QCOMPARE(manager.lightTextColor(), QColor(QStringLiteral("#231F1F")));
 }
 
 void ThemeManagerTest::selectedThemeFallsBackToDefaultForMalformedRuntimeTheme()

@@ -227,7 +227,7 @@ one wired interface has carrier and no IPv4 address. Use
 The vendor's public wrapper calls the operation `SpitPrintHead`, while the
 exported implementation is `API_StartSpitInk`. The supplied demo also names the
 associated maintenance position `FlashSprayHeight` and references a hold-fire
-state. PrintFlow therefore presents this operation as **Flash Spray**: rapidly
+state. PrintFlow therefore presents this operation as **Flushing**: rapidly
 firing selected nozzles at the maintenance station to keep them wet or clear
 light drying. The original vendor names remain in the adapter so symbol mapping
 stays unambiguous.

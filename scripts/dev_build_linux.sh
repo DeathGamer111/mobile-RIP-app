@@ -173,6 +173,7 @@ step "Configuring CMake"
 mapfile -t THEME_CMAKE_ARGS < <(theme_cmake_args)
 info "Theme: ${RIP_THEME}${RIP_THEME_FILE:+ from ${RIP_THEME_FILE}}"
 cmake -S . -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Debug \
+    -DBUILD_TESTING=OFF \
     -DDIRECT_PRINT_SDK_STRICT=ON "${THEME_CMAKE_ARGS[@]}"
 
 step "Building ${TARGET_NAME}"

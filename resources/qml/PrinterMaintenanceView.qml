@@ -22,6 +22,11 @@ Page {
 
     property int headMask: 3
     property int activeMotionAxis: 0
+    property int activeMotionDirection: 0
+    property bool axisMotionActive: false
+    property bool axisMotionHeld: false
+    property bool axisStopRequested: false
+    property bool axisHomeRequested: false
     property real printHeight: 0.0
     property int printX: 0
     property int printY: 0
@@ -98,7 +103,8 @@ Page {
 
     component ActionButton: ThemedButton {
         theme: root.theme
-        enabled: root.controlsEnabled && !nocaiDirectPrint.maintenanceBusy
+        enabled: root.controlsEnabled && !root.axisMotionActive
+                 && !nocaiDirectPrint.maintenanceBusy
         Layout.fillWidth: true
         Layout.minimumWidth: 0
         Layout.preferredWidth: 1
@@ -107,6 +113,35 @@ Page {
         Layout.maximumHeight: 44
         padding: 10
         font.pixelSize: 13
+    }
+
+    component MotionButton: ThemedButton {
+        property int motionAxis: 0
+        property int motionDirection: 0
+        property string motionLabel: ""
+
+        theme: root.theme
+        enabled: root.controlsEnabled
+                 && (!root.axisMotionActive
+                     || (root.activeMotionAxis === motionAxis
+                         && root.activeMotionDirection === motionDirection))
+                 && (!nocaiDirectPrint.maintenanceBusy
+                     || (root.axisMotionActive
+                         && root.activeMotionAxis === motionAxis
+                         && root.activeMotionDirection === motionDirection))
+        Layout.fillWidth: true
+        Layout.minimumWidth: 0
+        Layout.preferredWidth: 1
+        Layout.preferredHeight: 44
+        Layout.minimumHeight: 44
+        Layout.maximumHeight: 44
+        padding: 10
+        font.pixelSize: 13
+        autoRepeat: false
+
+        onPressed: root.beginAxisMotion(motionAxis, motionDirection, motionLabel)
+        onReleased: root.releaseAxisMotion(motionAxis, motionDirection)
+        onCanceled: root.releaseAxisMotion(motionAxis, motionDirection)
     }
 
     component ActionGrid: GridLayout {
@@ -219,11 +254,74 @@ Page {
         return true;
     }
 
-    function movePrinterAxis(axis, direction, label) {
+    function clearAxisMotionState() {
+        root.axisMotionActive = false;
+        root.axisMotionHeld = false;
+        root.axisStopRequested = false;
+        root.axisHomeRequested = false;
+        motionSafetyTimer.stop();
+    }
+
+    function beginAxisMotion(axis, direction, label) {
+        if (root.axisMotionActive || nocaiDirectPrint.maintenanceBusy)
+            return false;
+
         root.activeMotionAxis = axis;
-        return root.runAsyncAction(
+        root.activeMotionDirection = direction;
+        root.axisMotionActive = true;
+        root.axisMotionHeld = true;
+        root.axisStopRequested = false;
+        root.axisHomeRequested = false;
+        motionSafetyTimer.restart();
+
+        const started = root.runAsyncAction(
             label, "MoveAxis", {"axis": axis, "direction": direction},
-            false, null);
+            false, function (result, ok) {
+                if (!ok) {
+                    root.clearAxisMotionState();
+                    return;
+                }
+                if (root.axisHomeRequested) {
+                    Qt.callLater(root.stopAndHomeHead);
+                } else if (root.axisStopRequested || !root.axisMotionHeld) {
+                    Qt.callLater(root.stopActiveAxis);
+                }
+            }, false, false);
+        if (!started)
+            root.clearAxisMotionState();
+        return started;
+    }
+
+    function releaseAxisMotion(axis, direction) {
+        if (!root.axisMotionActive || root.activeMotionAxis !== axis
+                || root.activeMotionDirection !== direction)
+            return;
+
+        root.axisMotionHeld = false;
+        root.axisStopRequested = true;
+        if (!nocaiDirectPrint.maintenanceBusy)
+            root.stopActiveAxis();
+    }
+
+    function stopActiveAxis() {
+        if (!root.axisMotionActive)
+            return false;
+        if (nocaiDirectPrint.maintenanceBusy) {
+            root.axisStopRequested = true;
+            return false;
+        }
+
+        const axis = root.activeMotionAxis;
+        const label = axis === 0 ? "Stop Head Motion"
+                    : (axis === 1 ? "Stop Bed Motion" : "Stop Height Motion");
+        root.axisStopRequested = false;
+        return root.runAsyncAction(
+            label, "StopAxis", {"axis": axis}, true,
+            function (result, ok) {
+                root.clearAxisMotionState();
+                if (ok && axis === 2)
+                    root.statusText = label + " at " + result.position + " mm.";
+            }, false, false);
     }
 
     function stopPrinterAxis(axis, label) {
@@ -233,6 +331,23 @@ Page {
             function (result, ok) {
                 if (ok)
                     root.statusText = label + " at " + result.position + " mm.";
+            });
+    }
+
+    function stopAndHomeHead() {
+        root.axisMotionHeld = false;
+        root.axisStopRequested = false;
+        root.axisHomeRequested = true;
+        if (nocaiDirectPrint.maintenanceBusy)
+            return false;
+
+        const axis = root.axisMotionActive ? root.activeMotionAxis : 0;
+        return root.runAsyncAction(
+            "Stop and Home Head", "StopAndHomeHead", {"axis": axis}, true,
+            function (result, ok) {
+                root.clearAxisMotionState();
+                if (ok)
+                    root.statusText = "Motion stopped and the print head was sent to its capped home position.";
             });
     }
 
@@ -253,10 +368,10 @@ Page {
         case "PrintNozzleCheck": return "Printing Nozzle Check…";
         case "StartCleanOperation": return "Cleaning Print Heads…";
         case "WipePrintHead": return "Wiping Print Heads…";
-        case "StartPump": return "Starting Pump…";
-        case "StopPumpOperation": return "Stopping Pump…";
-        case "StartFlashSpray": return "Starting Flash Spray…";
-        case "StopFlashSpray": return "Stopping Flash Spray…";
+        case "Start Manual Cleaning": return "Starting Manual Cleaning…";
+        case "Stop Manual Cleaning": return "Stopping Manual Cleaning…";
+        case "Start Flushing": return "Starting Flushing…";
+        case "Stop Flushing": return "Stopping Flushing…";
         case "CapPrintHead": return "Capping Print Head…";
         case "SetPrintHeight": return "Moving to Print Height…";
         case "GetPrintHeight": return "Reading Print Height…";
@@ -331,7 +446,22 @@ Page {
         interval: 1500
         repeat: true
         running: root.visible && root.controlsEnabled && root.statusPollingEnabled
+                 && !root.axisMotionActive
         onTriggered: root.updateStatus(true)
+    }
+
+    Timer {
+        id: motionSafetyTimer
+        interval: 30000
+        repeat: false
+        onTriggered: {
+            if (!root.axisMotionActive)
+                return;
+            root.axisMotionHeld = false;
+            root.axisHomeRequested = true;
+            toast.show("Motion safety timeout reached. Stopping motion and homing the print head.");
+            root.stopAndHomeHead();
+        }
     }
 
     Component.onCompleted: {
@@ -353,6 +483,8 @@ Page {
                 theme: root.theme
                 Layout.preferredWidth: root.theme.headerButtonWidth(root.width)
                 Layout.preferredHeight: 40
+                enabled: !root.axisMotionActive
+                         && !nocaiDirectPrint.maintenanceBusy
                 onClicked: root.goBack()
             }
 
@@ -436,7 +568,7 @@ Page {
                 title: "Head Maintenance"
                 theme: root.theme
                 sectionEnabled: root.controlsEnabled
-                help: "Head mask is a bitmask: bit 0 selects head 1 and bit 1 selects head 2, so 3 selects both X-33 heads. Nozzle Check prints the SDK's diagnostic pattern. Automatic Head Cleaning runs the printer's cleaning cycle. Flash Spray rapidly fires the selected nozzles at the maintenance station to keep them wet or clear light drying; stop it when the refresh is complete."
+                help: "Head mask is a bitmask: bit 0 selects head 1 and bit 1 selects head 2, so 3 selects both X-33 heads. Nozzle Check prints the SDK's diagnostic pattern. Automatic Head Cleaning runs the printer's automatic cleaning cycle. Manual Cleaning runs the pump for the selected heads until stopped. Flushing rapidly fires the selected nozzles at the maintenance station to keep them wet or clear light drying; stop either operation when the desired cleaning is complete."
 
                 GridLayout {
                     Layout.fillWidth: true
@@ -486,30 +618,30 @@ Page {
                             "CapPrintHead", "CapPrintHead", {}, true, null)
                     }
                     ActionButton {
-                        text: "Start Pump"
+                        text: "Start Manual Cleaning"
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "StartPump", "StartPump",
+                            "Start Manual Cleaning", "StartPump",
                             {"headMask": root.headMask}, true, null)
                     }
                     ActionButton {
-                        text: "Stop Pump"
+                        text: "Stop Manual Cleaning"
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "StopPumpOperation", "StopPumpOperation", {}, true, null)
+                            "Stop Manual Cleaning", "StopPumpOperation", {}, true, null)
                     }
                     ActionButton {
-                        text: "Start Flash Spray"
+                        text: "Start Flushing"
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "StartFlashSpray", "StartFlashSpray",
+                            "Start Flushing", "StartFlashSpray",
                             {"headMask": root.headMask}, true, null)
                     }
                     ActionButton {
-                        text: "Stop Flash Spray"
+                        text: "Stop Flushing"
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "StopFlashSpray", "StopFlashSpray", {}, true, null)
+                            "Stop Flushing", "StopFlashSpray", {}, true, null)
                     }
                 }
             }
@@ -518,7 +650,7 @@ Page {
                 title: "Motion And Height"
                 theme: root.theme
                 sectionEnabled: root.controlsEnabled
-                help: "Use the arrows to move the print head left or right and the bed forward or back. Motion continues until Stop is pressed or the printer reaches its limit. Print height is in millimeters and accepts two decimal places."
+                help: "Press and hold an arrow to move; releasing it stops that axis. Stop & Home immediately stops the active axis and sends the print head to its capped home position. A 30-second safety timeout prevents unattended motion. Print height is in millimeters and accepts two decimal places."
 
                 Label {
                     text: "Head and Bed Motion"
@@ -538,46 +670,58 @@ Page {
                         Layout.fillWidth: true
                         Layout.preferredWidth: 1
                     }
-                    ActionButton {
-                        text: "↑ Forward"
-                        Accessible.name: "Move bed forward"
-                        onClicked: root.movePrinterAxis(1, 0, "Move Bed Forward")
+                    MotionButton {
+                        text: "↑ Back"
+                        Accessible.name: "Move bed back"
+                        motionAxis: 1
+                        motionDirection: 1
+                        motionLabel: "Move Bed Back"
                     }
                     Item {
                         Layout.fillWidth: true
                         Layout.preferredWidth: 1
                     }
 
-                    ActionButton {
+                    MotionButton {
                         text: "← Head"
                         Accessible.name: "Move print head left"
-                        onClicked: root.movePrinterAxis(0, 0, "Move Head Left")
+                        motionAxis: 0
+                        motionDirection: 0
+                        motionLabel: "Move Head Left"
                     }
-                    ActionButton {
-                        text: "■ Stop"
-                        Accessible.name: "Stop head or bed motion"
-                        onClicked: root.stopPrinterAxis(
-                            root.activeMotionAxis,
-                            root.activeMotionAxis === 0
-                                ? "Stop Head Motion"
-                                : (root.activeMotionAxis === 1
-                                   ? "Stop Bed Motion"
-                                   : "Stop Height Motion"))
+                    ThemedButton {
+                        text: "■ Stop & Home"
+                        theme: root.theme
+                        Accessible.name: "Stop motion and home the print head"
+                        enabled: root.controlsEnabled
+                                 && (!nocaiDirectPrint.maintenanceBusy
+                                     || root.axisMotionActive)
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                        Layout.preferredWidth: 1
+                        Layout.preferredHeight: 44
+                        padding: 8
+                        font.pixelSize: 12
+                        onClicked: root.stopAndHomeHead()
                     }
-                    ActionButton {
+                    MotionButton {
                         text: "Head →"
                         Accessible.name: "Move print head right"
-                        onClicked: root.movePrinterAxis(0, 1, "Move Head Right")
+                        motionAxis: 0
+                        motionDirection: 1
+                        motionLabel: "Move Head Right"
                     }
 
                     Item {
                         Layout.fillWidth: true
                         Layout.preferredWidth: 1
                     }
-                    ActionButton {
-                        text: "↓ Back"
-                        Accessible.name: "Move bed back toward the user"
-                        onClicked: root.movePrinterAxis(1, 1, "Move Bed Back")
+                    MotionButton {
+                        text: "↓ Forward"
+                        Accessible.name: "Move bed forward"
+                        motionAxis: 1
+                        motionDirection: 0
+                        motionLabel: "Move Bed Forward"
                     }
                     Item {
                         Layout.fillWidth: true

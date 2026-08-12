@@ -12,6 +12,7 @@
 #include <QMutexLocker>
 #include <QDataStream>
 #include <QProcess>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QUrl>
@@ -816,8 +817,56 @@ bool NocaiDirectPrintClient::printAlignmentPattern(int type)
 
 bool NocaiDirectPrintClient::printNozzleCheck()
 {
-    // eAlignmentPatternTypes::E_NOZZLE_CHECK is the first documented value.
-    return printAlignmentPattern(0);
+    QMutexLocker locker(&m_mutex);
+    if (!ensureLoaded() ||
+        !requireFunction(reinterpret_cast<const void*>(m_getPrintXYValue),
+                         "GetPrintXYValue") ||
+        !requireFunction(reinterpret_cast<const void*>(m_setPrintXYValue),
+                         "SetPrintXYValue") ||
+        !requireFunction(reinterpret_cast<const void*>(m_printAlignmentPattern),
+                         "PrintAlignmentPattern")) {
+        return false;
+    }
+
+    bool ok = false;
+    withSdkWorkingDirectory([&]() {
+        // The controller persists SetPrintXYValue across jobs and process
+        // restarts. A prior application crash can therefore leave a stale
+        // per-job offset behind even though normal print cleanup restores it.
+        // A nozzle check is always a machine-origin operation, so reconcile
+        // the persistent value immediately before asking the SDK to create it.
+        uint32_t originX = 0;
+        uint32_t originY = 0;
+        if (!callSucceeded(m_getPrintXYValue(&originX, &originY),
+                           "GetPrintXYValue before nozzle check")) {
+            return false;
+        }
+        if (originX != 0 || originY != 0) {
+            if (!callSucceeded(m_setPrintXYValue(0, 0),
+                               "Reset print origin before nozzle check") ||
+                !callSucceeded(m_getPrintXYValue(&originX, &originY),
+                               "Verify print origin before nozzle check")) {
+                return false;
+            }
+        }
+        if (originX != 0 || originY != 0) {
+            setError(QStringLiteral(
+                "The printer origin could not be reset to 0 x 0 mm before the nozzle check."));
+            return false;
+        }
+
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+        // The ARM getter/setter use a short-lived Command-205 socket. Keep
+        // that worker clear of the nozzle engine's internal StartPrint call.
+        QThread::msleep(1000);
+#endif
+
+        // eAlignmentPatternTypes::E_NOZZLE_CHECK is the first documented
+        // value. Call it under this same SDK working-directory transaction.
+        ok = callSucceeded(m_printAlignmentPattern(0), "PrintAlignmentPattern");
+        return ok;
+    });
+    return ok;
 }
 
 bool NocaiDirectPrintClient::startMaintenanceAction(
@@ -890,6 +939,15 @@ QVariantMap NocaiDirectPrintClient::executeMaintenanceAction(
         const QVariantMap value = stopAxis(
             arguments.value(QStringLiteral("axis")).toInt());
         ok = value.value(QStringLiteral("ok")).toBool();
+        result = value;
+    } else if (action == QLatin1String("StopAndHomeHead")) {
+        QVariantMap value = stopAxis(
+            arguments.value(QStringLiteral("axis"), 0).toInt());
+        ok = value.value(QStringLiteral("ok")).toBool();
+        if (ok)
+            ok = capPrintHead();
+        value[QStringLiteral("ok")] = ok;
+        value[QStringLiteral("headHomed")] = ok;
         result = value;
     } else if (action == QLatin1String("SaveAxisPos")) {
         const QVariantMap value = saveAxisPos(
@@ -1531,6 +1589,44 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
     bool ok = false;
 
     withSdkWorkingDirectory([&]() {
+        bool nonzeroJobOriginActive = false;
+        const auto resetJobOrigin = [&](bool preserveExistingError) {
+            if (!nonzeroJobOriginActive)
+                return true;
+
+            const QString existingError = m_lastError;
+            nonzeroJobOriginActive = false;
+
+            bool reset = m_setPrintXYValue &&
+                m_setPrintXYValue(0, 0) == kSySucceeded;
+            uint32_t resetX = std::numeric_limits<uint32_t>::max();
+            uint32_t resetY = std::numeric_limits<uint32_t>::max();
+            reset = reset && m_getPrintXYValue &&
+                m_getPrintXYValue(&resetX, &resetY) == kSySucceeded &&
+                resetX == 0 && resetY == 0;
+
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+            // Set/Get origin each open a short-lived Command-205 socket on
+            // the ARM SDK. Let that worker finish closing before a nozzle
+            // check, maintenance command, or subsequent job is submitted.
+            QThread::msleep(1000);
+#endif
+
+            if (reset) {
+                qDebug() << "NocaiDirectPrintClient: restored the printer origin to 0 x 0 mm after the scoped job offset.";
+            } else if (!preserveExistingError || existingError.isEmpty()) {
+                setError(QStringLiteral(
+                    "The print finished, but the printer origin could not be restored to 0 x 0 mm."));
+            }
+
+            if (preserveExistingError && !existingError.isEmpty())
+                m_lastError = existingError;
+            return reset;
+        };
+        const auto originCleanup = qScopeGuard([&]() {
+            resetJobOrigin(true);
+        });
+
         if (settings.mediaHeightMm >= 0.0) {
             if (!requireFunction(reinterpret_cast<const void*>(m_setPrintHeight),
                                  "SetPrintHeight") ||
@@ -1602,6 +1698,10 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                 settings.printOffsetXmm);
             const uint32_t expectedY = millimetersToPrintXYUnits(
                 settings.printOffsetYmm);
+            // Arm cleanup before touching the persistent setting. Even a
+            // setter/getter failure after a partial write must attempt to put
+            // the controller back at the canonical origin.
+            nonzeroJobOriginActive = expectedX != 0 || expectedY != 0;
             uint32_t actualX = 0;
             uint32_t actualY = 0;
             if (!callSucceeded(m_getPrintXYValue(&actualX, &actualY),
@@ -1665,21 +1765,12 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
         };
 
 #if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
-        const bool armOriginRequested = settings.printOffsetXmm != 0 ||
-                                        settings.printOffsetYmm != 0;
+        // SetPrintXYValue is persistent controller state. Always reconcile it,
+        // including for a zero-offset job, so a previous job or maintenance
+        // action can never become the implicit origin of a later print.
         if (raster.format == DirectPrintRasterFormat::NocaiX33Standard &&
-            armOriginRequested &&
-            !prepareX33PrintOrigin()) {
+            !prepareX33PrintOrigin())
             return false;
-        }
-        if (raster.format == DirectPrintRasterFormat::NocaiX33Standard &&
-            !armOriginRequested) {
-            // The successful ARM debugger upload performed no Command-205
-            // origin transaction. A zero-offset job must preserve that exact
-            // InitPrinter -> StartPrint boundary rather than opening an extra
-            // PrinterSocket session merely to confirm zero values.
-            qDebug() << "NocaiDirectPrintClient: no ARM X-33 origin override requested; skipped origin socket transaction.";
-        }
 #endif
 
         if (!callSucceeded(m_initPrinter(), "InitPrinter"))
@@ -1787,9 +1878,16 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
         }
 
         const bool closed = callSucceeded(m_closePrint(), "ClosePrint");
-        if (closed)
+        if (closed) {
             qDebug() << "NocaiDirectPrintClient: raster upload finalized and print session closed.";
-        ok = closed;
+            // The offset is consumed by StartPrint and must not leak into
+            // nozzle checks or future jobs. Treat reset failure as a failed
+            // submission because leaving persistent controller state behind
+            // would make subsequent output positionally unsafe.
+            ok = resetJobOrigin(false);
+        } else {
+            ok = false;
+        }
         return ok;
     });
 

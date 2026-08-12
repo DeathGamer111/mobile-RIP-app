@@ -172,14 +172,71 @@ Item {
         })
     }
 
-    function createJobFromImage(sourcePath) {
+    function createJobFromImage(sourcePath, openDetails, showResult) {
+        const shouldOpenDetails = openDetails === undefined ? true : openDetails
+        const shouldShowResult = showResult === undefined ? true : showResult
         const index = jobModel.addJobFromImage(sourcePath)
         if (index >= 0) {
-            toast.show(strings.trKey("jobs.toast.imageJobCreated"))
-            pushJobDetails(index)
+            if (shouldShowResult)
+                toast.show(strings.trKey("jobs.toast.imageJobCreated"))
+            if (shouldOpenDetails)
+                pushJobDetails(index)
         } else {
             const message = jobModel.lastError()
-            toast.show(message.length > 0 ? message : strings.trKey("jobs.toast.imageJobFailed"))
+            if (shouldShowResult)
+                toast.show(message.length > 0 ? message : strings.trKey("jobs.toast.imageJobFailed"))
+        }
+        return index
+    }
+
+    function isSupportedDroppedImage(sourceUrl) {
+        const path = String(sourceUrl).split(/[?#]/)[0].toLowerCase()
+        return /\.(jpeg|jpg|png|bmp|tiff|tif|svg|pdf)$/.test(path)
+    }
+
+    function supportedDroppedImages(urls) {
+        const images = []
+        if (!urls)
+            return images
+
+        for (let i = 0; i < urls.length; ++i) {
+            const sourceUrl = String(urls[i])
+            if (isSupportedDroppedImage(sourceUrl))
+                images.push(sourceUrl)
+        }
+        return images
+    }
+
+    function createJobsFromDroppedImages(urls) {
+        const images = supportedDroppedImages(urls)
+        if (images.length === 0) {
+            toast.show(strings.trKey("jobs.toast.dropUnsupported"))
+            return
+        }
+
+        if (images.length === 1) {
+            createJobFromImage(images[0])
+            return
+        }
+
+        let createdCount = 0
+        let failureMessage = ""
+        for (let i = 0; i < images.length; ++i) {
+            if (createJobFromImage(images[i], false, false) >= 0) {
+                ++createdCount
+            } else if (failureMessage.length === 0) {
+                failureMessage = jobModel.lastError()
+            }
+        }
+
+        if (createdCount === images.length) {
+            toast.show(strings.trKey("jobs.toast.imagesDropped"))
+        } else if (createdCount > 0) {
+            toast.show(strings.trKey("jobs.toast.imagesDropPartial"))
+        } else {
+            toast.show(failureMessage.length > 0
+                       ? failureMessage
+                       : strings.trKey("jobs.toast.imageJobFailed"))
         }
     }
 
@@ -1054,6 +1111,86 @@ Item {
         }
     }
     
+    // Desktop file drops use the same validated/copying import path as Upload Image.
+    DropArea {
+        id: imageDropArea
+        anchors.fill: parent
+        z: 900
+
+        property bool hasSupportedImages: false
+
+        onEntered: function(dragEvent) {
+            hasSupportedImages = dragEvent.hasUrls
+                    && root.supportedDroppedImages(dragEvent.urls).length > 0
+            if (dragEvent.hasUrls)
+                dragEvent.accept(Qt.CopyAction)
+        }
+
+        onPositionChanged: function(dragEvent) {
+            hasSupportedImages = dragEvent.hasUrls
+                    && root.supportedDroppedImages(dragEvent.urls).length > 0
+            if (dragEvent.hasUrls)
+                dragEvent.accept(Qt.CopyAction)
+        }
+
+        onExited: hasSupportedImages = false
+
+        onDropped: function(dropEvent) {
+            const droppedUrls = dropEvent.urls
+            const supportedImages = root.supportedDroppedImages(droppedUrls)
+            hasSupportedImages = false
+            if (!dropEvent.hasUrls || supportedImages.length === 0) {
+                dropEvent.accepted = false
+                if (dropEvent.hasUrls)
+                    toast.show(strings.trKey("jobs.toast.dropUnsupported"))
+                return
+            }
+
+            // Force copy semantics: the source files must never be moved or deleted.
+            dropEvent.accept(Qt.CopyAction)
+            root.createJobsFromDroppedImages(supportedImages)
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: 18
+            visible: imageDropArea.containsDrag
+            radius: 14
+            color: imageDropArea.hasSupportedImages
+                   ? Qt.rgba(root.theme.accent.r, root.theme.accent.g, root.theme.accent.b, 0.20)
+                   : Qt.rgba(root.theme.danger.r, root.theme.danger.g, root.theme.danger.b, 0.18)
+            border.width: 3
+            border.color: imageDropArea.hasSupportedImages ? root.theme.accent : root.theme.danger
+
+            Column {
+                anchors.centerIn: parent
+                width: Math.min(parent.width - 40, 420)
+                spacing: 8
+
+                Label {
+                    width: parent.width
+                    text: imageDropArea.hasSupportedImages
+                          ? strings.trKey("jobs.dropImages")
+                          : strings.trKey("jobs.dropUnsupported")
+                    color: root.theme.text
+                    font.pixelSize: 20
+                    font.bold: true
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                }
+
+                Label {
+                    width: parent.width
+                    text: strings.trKey("jobs.dropImages.formats")
+                    color: root.theme.subtext
+                    font.pixelSize: 14
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                }
+            }
+        }
+    }
+
     
     // Full-screen progress overlay while PRN generation runs.
     Item {
