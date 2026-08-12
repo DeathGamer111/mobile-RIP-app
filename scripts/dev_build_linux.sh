@@ -26,6 +26,12 @@ fail() {
     exit 1
 }
 
+apt_package_available() {
+    local candidate
+    candidate="$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ { print $2; exit }')"
+    [[ -n "${candidate}" && "${candidate}" != "(none)" ]]
+}
+
 find_direct_printer_interface() {
     if [[ -n "${PRINTFLOW_PRINTER_INTERFACE:-}" ]]; then
         [[ -d "/sys/class/net/${PRINTFLOW_PRINTER_INTERFACE}" ]] ||
@@ -116,9 +122,18 @@ sudo apt-get update -qq
 # the legacy `fuse` package removes fuse3, which in turn removes Ubuntu's
 # desktop/session packages and prevents GDM from starting.
 FUSE2_PACKAGE="libfuse2"
-if apt-cache show libfuse2t64 2>/dev/null | grep -q '^Package: libfuse2t64$'; then
+if apt_package_available libfuse2t64; then
     FUSE2_PACKAGE="libfuse2t64"
 fi
+
+IMAGEMAGICK_DEV_PACKAGE=""
+for candidate in libmagick++-6.q16-dev libmagick++-7.q16-dev libmagick++-dev; do
+    if apt_package_available "${candidate}"; then
+        IMAGEMAGICK_DEV_PACKAGE="${candidate}"
+        break
+    fi
+done
+[[ -n "${IMAGEMAGICK_DEV_PACKAGE}" ]] || fail "No supported ImageMagick Magick++ development package is available."
 
 sudo apt-get install -y --no-remove \
     cmake g++ qt6-base-dev qt6-base-private-dev qt6-declarative-dev \
@@ -126,14 +141,14 @@ sudo apt-get install -y --no-remove \
     qt6-l10n-tools qml6-module-qtquick qml6-module-qtquick-controls \
     qml6-module-qtquick-layouts qml6-module-qt-labs-platform \
     qml6-module-qtquick-dialogs qt6-wayland pkg-config \
-    liblcms2-dev libcups2-dev libmagick++-6.q16-dev libqt6quick6 \
+    liblcms2-dev libcups2-dev "${IMAGEMAGICK_DEV_PACKAGE}" libqt6quick6 \
     wget git patchelf desktop-file-utils libglib2.0-bin \
     "${FUSE2_PACKAGE}" zsync xz-utils libgl1-mesa-dev libopengl-dev libvulkan-dev \
     qt6-declarative-dev-tools qt6-qmltooling-plugins \
     qml6-module-qtquick-dialogs libqt6widgets6 qml6-module-qtpositioning \
     qml6-module-qtcore qml6-module-qtquick-window qml-module-qtquick-shapes \
-    qt5-qmltooling-plugins qt6-image-formats-plugins libqt6widgets6 \
-    libqt6svg6 libqt6svgwidgets6 qml6-module-qtqml-workerscript \
+    qml6-module-qtquick-shapes qt5-qmltooling-plugins qt6-image-formats-plugins \
+    qt6-svg-plugins libqt6widgets6 libqt6svg6 libqt6svgwidgets6 qml6-module-qtqml-workerscript \
     qml6-module-qtquick-templates libqt6test6 \
     libcap2-bin network-manager iproute2
 
@@ -141,6 +156,13 @@ step "Applying ImageMagick policy"
 sudo bash ./scripts/Relax_ImageMagick_Limits.sh
 
 step "Preparing build directories"
+if [[ -x "${BUILD_DIR}/PrintFlowPrinterService" ]]; then
+    "${BUILD_DIR}/PrintFlowPrinterService" --shutdown || true
+    for _ in {1..20}; do
+        "${BUILD_DIR}/PrintFlowPrinterService" --ping >/dev/null 2>&1 || break
+        sleep 0.1
+    done
+fi
 sudo rm -rf "${HOME}/.local/share/PrintFlow/"
 sudo rm -rf "${HOME}/.cache/PrintFlow/"
 rm -rf "${BUILD_DIR}"
@@ -150,7 +172,8 @@ info "Build directory: ${BUILD_DIR}"
 step "Configuring CMake"
 mapfile -t THEME_CMAKE_ARGS < <(theme_cmake_args)
 info "Theme: ${RIP_THEME}${RIP_THEME_FILE:+ from ${RIP_THEME_FILE}}"
-cmake -S . -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Debug "${THEME_CMAKE_ARGS[@]}"
+cmake -S . -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Debug \
+    -DDIRECT_PRINT_SDK_STRICT=ON "${THEME_CMAKE_ARGS[@]}"
 
 step "Building ${TARGET_NAME}"
 cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
@@ -178,10 +201,14 @@ step "Configuring direct-printer access"
 configure_direct_printer_network
 
 EXECUTABLE_PATH="${BUILD_DIR}/${TARGET_NAME}"
+SERVICE_PATH="${BUILD_DIR}/PrintFlowPrinterService"
 [[ -x "${EXECUTABLE_PATH}" ]] || fail "Built executable was not found: ${EXECUTABLE_PATH}"
-sudo setcap cap_net_raw+ep "${EXECUTABLE_PATH}"
-info "Granted CAP_NET_RAW to ${EXECUTABLE_PATH} for SDK printer discovery."
+[[ -x "${SERVICE_PATH}" ]] || fail "Printer service was not found: ${SERVICE_PATH}"
+sudo setcap cap_net_raw+ep "${SERVICE_PATH}"
+getcap "${SERVICE_PATH}" | grep -q 'cap_net_raw=ep' ||
+    fail "CAP_NET_RAW was not applied to ${SERVICE_PATH}."
+info "Granted CAP_NET_RAW to the persistent printer service: ${SERVICE_PATH}"
 
 step "Build complete"
 info "Run: ./${BUILD_DIR}/${TARGET_NAME}"
-info "A matching direct-print SDK, when configured, is staged beside the executable by CMake."
+info "The GUI starts and reuses PrintFlowPrinterService; only that service owns the vendor SDK."

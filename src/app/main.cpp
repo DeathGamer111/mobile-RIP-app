@@ -3,8 +3,10 @@
 #include <QQmlContext>
 #include <QImageReader>
 #include <QIcon>
+#include <QLockFile>
 #include <QPalette>
 #include <QStyleFactory>
+#include <QTimer>
 #include <QDir>
 #include <QFileInfo>
 #include <QDebug>
@@ -16,7 +18,11 @@
 #include "PrintJobOutput.h"
 #include "PrintJobCMYK.h"
 #include "PrintJobMultiInk.h"
+#if defined(Q_OS_ANDROID)
 #include "NocaiDirectPrintClient.h"
+#else
+#include "PrinterServiceClient.h"
+#endif
 #include "ImageEditor.h"
 #include "ColorProfile.h"
 #include "ColorManagementManager.h"
@@ -27,13 +33,35 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 
-#if defined(Q_OS_LINUX) && !defined(NDEBUG)
+#if defined(Q_OS_LINUX)
 #include <csignal>
+#if !defined(NDEBUG)
 #include <execinfo.h>
 #include <unistd.h>
 #endif
+#endif
 
 namespace {
+#if defined(Q_OS_LINUX)
+volatile std::sig_atomic_t g_terminationRequested = 0;
+
+void gracefulTerminationSignalHandler(int)
+{
+    // Assigning sig_atomic_t is async-signal-safe. The Qt event loop observes
+    // it below and performs orderly object destruction outside signal context.
+    g_terminationRequested = 1;
+}
+
+void installGracefulTerminationHandlers()
+{
+    struct sigaction action = {};
+    action.sa_handler = gracefulTerminationSignalHandler;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGINT, &action, nullptr);
+    sigaction(SIGTERM, &action, nullptr);
+}
+#endif
+
 #if defined(Q_OS_LINUX) && !defined(NDEBUG)
 void crashBacktraceHandler(int signalNumber)
 {
@@ -88,10 +116,31 @@ int main(int argc, char *argv[]) {
     QCoreApplication::setApplicationName(QStringLiteral("PrintFlow"));
     app.setDesktopFileName(QStringLiteral("PrintFlow"));
 
-    const QStringList arguments = QCoreApplication::arguments();
-    if (arguments.size() == 3 &&
-        arguments.at(1) == QStringLiteral("--nocai-print-worker")) {
-        return NocaiDirectPrintClient::runSerializedPrintWorker(arguments.at(2));
+#if defined(Q_OS_LINUX)
+    installGracefulTerminationHandlers();
+    QTimer terminationPoll;
+    QObject::connect(&terminationPoll, &QTimer::timeout, &app, [&app]() {
+        if (g_terminationRequested != 0)
+            app.quit();
+    });
+    terminationPoll.start(100);
+#endif
+
+    // Keep one desktop UI per user so duplicate windows cannot submit
+    // conflicting jobs. Linux SDK ownership is enforced independently by the
+    // persistent printer service, which may serve additional trusted clients.
+    QString runtimeDirectory = QStandardPaths::writableLocation(
+        QStandardPaths::RuntimeLocation);
+    if (runtimeDirectory.isEmpty())
+        runtimeDirectory = QStandardPaths::writableLocation(
+            QStandardPaths::TempLocation);
+    QDir().mkpath(runtimeDirectory);
+    QLockFile instanceLock(
+        QDir(runtimeDirectory).absoluteFilePath(QStringLiteral("printflow.lock")));
+    instanceLock.setStaleLockTime(0);
+    if (!instanceLock.tryLock()) {
+        qCritical() << "PrintFlow is already running; refusing to start a second GUI instance.";
+        return 2;
     }
 
     migrateLegacyAppData();
@@ -116,7 +165,11 @@ int main(int argc, char *argv[]) {
     ImageEditor imageEditor;
     PrintJobOutput printJobOutput;
     PrintJobCMYK printJobCMYKOutput;
+#if defined(Q_OS_ANDROID)
     NocaiDirectPrintClient nocaiDirectPrint;
+#else
+    PrinterServiceClient nocaiDirectPrint;
+#endif
     PrintJobMultiInk printJobMultiInk;
     ColorProfile colorProfile;
     ColorManagementManager colorManager;

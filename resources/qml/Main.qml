@@ -66,6 +66,8 @@ ApplicationWindow {
         property int sdkPass: colorManager.directPrintSetting("pass")
         property int sdkVsdMode: colorManager.directPrintSetting("vsdMode")
         property bool isGeneratingPRN: false						// Global flag to gate UI during PRN generation.
+        property string outputProgressMode: ""                  // "prn" | "direct"
+        property string outputProgressPhase: ""                 // rasterizing | generatingPrn | printing
 
         function directPrintSdkFamily() {
             return colorManager.directPrintSdkFamilyForPrinter(selectedPrinter)

@@ -92,12 +92,14 @@ android-build/
 # Large Files in Assets
 assets/blue_noise_mask_*/**
 resources/assets/blue_noise_mask_*/**
+/resources/assets.tar.gz
 
 # Local vendor SDK drops
 DemoFor*Linux*/
 DemoFor*Linux*.zip
 DemoFor*Linux*.tar
 DemoFor*Linux*.tar.gz
+/*-diagnostics.tar.gz
 src/vendor/nocai/SDKExample*/
 src/vendor/nocai/sdk*/
 src/vendor/nocai/local*/
@@ -113,5 +115,8 @@ src/vendor/nocai/*.so.*
 .android-sdk/
 .android-env
 .tools/
+/*.AppDir/
+/output/
+*.AppImage
 .gradle/
 aqtinstall.log

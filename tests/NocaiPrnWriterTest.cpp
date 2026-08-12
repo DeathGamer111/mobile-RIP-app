@@ -32,6 +32,7 @@ class NocaiPrnWriterTest : public QObject
 
 private slots:
     void packs2BppRows();
+    void widensPackedX33HeaderForSdk();
     void writesStandardCmykPrn();
     void writesStandardX33WhitePrn();
     void writesMultiInkPrn();
@@ -49,6 +50,25 @@ void NocaiPrnWriterTest::packs2BppRows()
     QCOMPARE(packed[0][1], uint8_t(0x40));
     QCOMPARE(packed[0][2], uint8_t(0x00));
     QCOMPARE(packed[0][3], uint8_t(0x00));
+}
+
+void NocaiPrnWriterTest::widensPackedX33HeaderForSdk()
+{
+    const auto packed = NocaiPrnWriter::makeStandardX33Header(
+        1600, 2134, 720, 1440, 400, 4);
+    const auto sdk = NocaiPrnWriter::makeStandardX33SdkHeader(packed);
+
+    QCOMPARE(sdk[0], 0x00005555u);
+    QCOMPARE(sdk[1], 720u);
+    QCOMPARE(sdk[2], 1440u);
+    QCOMPARE(sdk[3], 400u);
+    QCOMPARE(sdk[4], 2134u);
+    QCOMPARE(sdk[5], 1600u);
+    QCOMPARE(sdk[7], 4u); // widened Colors
+    QCOMPARE(sdk[8], 0u); // widened packed Bits
+    QCOMPARE(sdk[9], 1u); // packed Pass
+    QCOMPARE(sdk[10], 1u); // packed VsdMode
+    QCOMPARE(sdk[11], 0u);
 }
 
 void NocaiPrnWriterTest::writesStandardCmykPrn()

@@ -45,6 +45,7 @@ public:
 
 signals:
     void prnGenerationFinished(bool success);
+    void outputPhaseChanged(const QString& phase);
 
 public slots:
     Q_INVOKABLE void runPRNGeneration(const QVariantMap& jobMap, const QString& outputPath);

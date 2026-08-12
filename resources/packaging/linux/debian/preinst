@@ -1,0 +1,18 @@
+#!/bin/sh
+
+set -e
+
+# A running service maps the old executable and vendor SDK. Stop it before an
+# upgrade so the next GUI starts exactly the binaries from the new package.
+if [ "$1" = "upgrade" ]; then
+    for process_dir in /proc/[0-9]*; do
+        process_executable="$(readlink "${process_dir}/exe" 2>/dev/null || true)"
+        case "$process_executable" in
+            /usr/bin/PrintFlowPrinterService|/usr/bin/PrintFlowPrinterService\ \(deleted\))
+                kill -TERM "${process_dir##*/}" 2>/dev/null || true
+                ;;
+        esac
+    done
+fi
+
+exit 0

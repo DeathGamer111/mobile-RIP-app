@@ -15,6 +15,7 @@ Usage: ./Dev_Build_App.sh [mode]
 
 Modes:
   --linux                 Build/run the Linux desktop app
+  --linux-package         Build architecture-specific AppImage and Debian packages
   --test                  Configure, build, and run the local CTest suite
   --android-setup         Install or repair Android SDK, NDK, emulator, and Qt Android kits
   --android               Build, install, and launch the Android APK on the emulator
@@ -48,6 +49,9 @@ for arg in "$@"; do
             ;;
         --linux)
             mode="linux"
+            ;;
+        --linux-package)
+            mode="linux-package"
             ;;
         --test)
             mode="test"
@@ -101,6 +105,7 @@ Select PrintFlow build target:
   3) Android setup / repair environment
   4) Android build + install + run on emulator
   5) Android build + install + run on USB device
+  6) Linux AppImage package
   q) Quit
 EOF
     printf 'Choice [1]: '
@@ -112,6 +117,7 @@ EOF
         3) mode="android-setup" ;;
         4) mode="android" ;;
         5) mode="android-device" ;;
+        6) mode="linux-package" ;;
         q|Q) exit 0 ;;
         *) printf 'Unknown choice: %s\n' "${reply}" >&2; exit 1 ;;
     esac
@@ -121,7 +127,7 @@ EOF
 
 needs_theme_selection() {
     case "$1" in
-        linux|android|android-device|android-build|android-setup-build) return 0 ;;
+        linux|linux-package|android|android-device|android-build|android-setup-build) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -220,6 +226,9 @@ fi
 case "${mode}" in
     linux)
         exec "${SCRIPT_DIR}/scripts/dev_build_linux.sh" "${pass_args[@]}"
+        ;;
+    linux-package)
+        exec "${SCRIPT_DIR}/scripts/package_linux_appimage.sh" "${pass_args[@]}"
         ;;
     test)
         exec "${SCRIPT_DIR}/scripts/run_tests.sh" "${pass_args[@]}"

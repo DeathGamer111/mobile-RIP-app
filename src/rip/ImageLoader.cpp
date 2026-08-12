@@ -1,4 +1,5 @@
 #include "ImageLoader.h"
+#include "MagickCompatibility.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #include <Magick++.h>
@@ -184,7 +185,7 @@ QVariantMap ImageLoader::inspectImage(const QString &path) {
             meta["height"] = static_cast<int>(image.rows());
             
             // Estimate channels based on color space
-	    int channelCount = (image.matte() ? 4 : 3);
+	    int channelCount = (MagickCompatibility::hasAlphaChannel(image) ? 4 : 3);
             if (image.colorSpace() == Magick::CMYKColorspace) {
 		channelCount = 4;
 	    }

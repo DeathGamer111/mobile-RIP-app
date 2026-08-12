@@ -16,9 +16,9 @@ struct Callbacks
     NoArgFn closePrint = nullptr;
 };
 
-// The July 2026 Linux x86-64 SDK omits four plain C wrappers that its
-// alignment-pattern implementation still imports. The ARM SDK shows that
-// those wrappers forward directly to the corresponding API_* functions.
+// The Linux SDKs call four host symbols from vendor-generated pattern jobs.
+// x86-64 exposes them as lazy imports; ARM also needs them while using the
+// documented API_* entry points. They forward to the resolved API functions.
 bool install(const void* owner, const Callbacks& callbacks);
 void uninstall(const void* owner);
 bool isInstalledFor(const void* owner);

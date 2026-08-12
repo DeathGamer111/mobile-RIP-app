@@ -1,4 +1,5 @@
 #include "NocaiDirectPrintClient.h"
+#include "NocaiArmCommandTagCompatibility.h"
 #include "NocaiDirectPrintCompatibility.h"
 #include "NocaiPrnWriter.h"
 
@@ -15,8 +16,10 @@
 #include <QThread>
 #include <QUrl>
 #include <QVariantMap>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -312,13 +315,29 @@ NocaiDirectPrintClient::NocaiDirectPrintClient(QObject* parent)
     static_assert(sizeof(PrinterInfo) == 28, "Vendor PrinterInfo ABI changed.");
     static_assert(sizeof(UVParamValues) == 10, "Vendor UVParamValues ABI changed.");
     static_assert(sizeof(NewUVParamValues) == 14, "Vendor NewUVParamValues ABI changed.");
+
+    connect(&m_maintenanceWatcher, &QFutureWatcher<QVariantMap>::finished,
+            this, [this]() {
+        const QVariantMap completion = m_maintenanceWatcher.result();
+        const QString action = m_currentMaintenanceAction;
+        m_currentMaintenanceAction.clear();
+        m_maintenanceBusy = false;
+        emit maintenanceBusyChanged();
+        emit maintenanceActionFinished(
+            action,
+            completion.value(QStringLiteral("ok")).toBool(),
+            completion.value(QStringLiteral("result")),
+            completion.value(QStringLiteral("error")).toString());
+        emit statusChanged();
+    });
 }
 
 NocaiDirectPrintClient::~NocaiDirectPrintClient()
 {
+    if (m_maintenanceWatcher.isRunning())
+        m_maintenanceWatcher.waitForFinished();
     QMutexLocker locker(&m_mutex);
-    NocaiDirectPrintCompatibility::uninstall(this);
-    m_library.unload();
+    unloadSdkSession();
 }
 
 bool NocaiDirectPrintClient::isAvailable()
@@ -357,54 +376,9 @@ void NocaiDirectPrintClient::setSdkRootPath(const QString& path)
     if (m_sdkRootPath == clean)
         return;
 
-    NocaiDirectPrintCompatibility::uninstall(this);
     m_sdkRootPath = clean;
     m_resolvedSdkRoot.clear();
-    m_symbolsResolved = false;
-    m_selectedPrinterIndex = -1;
-    m_connected = false;
-    m_printers.clear();
-    m_library.unload();
-    m_searchPrinter = nullptr;
-    m_choosePrinter = nullptr;
-    m_initPrinter = nullptr;
-    m_startPrint = nullptr;
-    m_printALine = nullptr;
-    m_abortPrint = nullptr;
-    m_pausePrint = nullptr;
-    m_continuePrint = nullptr;
-    m_endPrint = nullptr;
-    m_closePrint = nullptr;
-    m_setJobSettings = nullptr;
-    m_getJobSettings = nullptr;
-    m_connectPrinter = nullptr;
-    m_wipePrintHead = nullptr;
-    m_startCleanOperation = nullptr;
-    m_startPump = nullptr;
-    m_stopPumpOperation = nullptr;
-    m_spitPrintHead = nullptr;
-    m_stopSpitOperation = nullptr;
-    m_capPrintHead = nullptr;
-    m_moveAxis = nullptr;
-    m_stopAxis = nullptr;
-    m_saveAxisPos = nullptr;
-    m_setPrintHeight = nullptr;
-    m_getPrintHeight = nullptr;
-    m_setAlignmentValues = nullptr;
-    m_getAlignmentValues = nullptr;
-    m_exportConfigFile = nullptr;
-    m_importConfigFile = nullptr;
-    m_printAlignmentPattern = nullptr;
-    m_getPrinterStatus = nullptr;
-    m_getPrinterInfo = nullptr;
-    m_setPrintXYValue = nullptr;
-    m_getPrintXYValue = nullptr;
-    m_setUVParamValues = nullptr;
-    m_getUVParamValues = nullptr;
-    m_getSupportNewUVParamFunction = nullptr;
-    m_setNewUVParamFunction = nullptr;
-    m_setNewUVParamValues = nullptr;
-    m_getNewUVParamValues = nullptr;
+    unloadSdkSession();
     emit statusChanged();
 }
 
@@ -422,12 +396,7 @@ void NocaiDirectPrintClient::setAutoDiscoverSdk(bool enabled)
 
     m_autoDiscoverSdk = enabled;
     m_resolvedSdkRoot.clear();
-    m_symbolsResolved = false;
-    m_selectedPrinterIndex = -1;
-    m_connected = false;
-    m_printers.clear();
-    NocaiDirectPrintCompatibility::uninstall(this);
-    m_library.unload();
+    unloadSdkSession();
     emit statusChanged();
 }
 
@@ -442,6 +411,11 @@ QStringList NocaiDirectPrintClient::maintenanceSupportedPrinters() const
     return {
         QStringLiteral("X-33")
     };
+}
+
+bool NocaiDirectPrintClient::maintenanceBusy() const
+{
+    return m_maintenanceBusy;
 }
 
 bool NocaiDirectPrintClient::supportsMaintenance(const QString& printerName) const
@@ -460,6 +434,20 @@ bool NocaiDirectPrintClient::refreshPrinters()
     QMutexLocker locker(&m_mutex);
     if (!ensureLoaded())
         return false;
+
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+    // ConnectPrinter initializes controller state that the ARM SDK does not
+    // expose a matching disconnect operation for. SearchPrinter starts a new
+    // lifecycle and used to erase our knowledge of a healthy session, causing
+    // a later ConnectPrinter to collide with the session PrintFlow already
+    // owned. Once connected, preserve the discovered list and let status,
+    // maintenance, and print calls reuse that initialized SDK instance.
+    if (m_connected) {
+        m_lastError.clear();
+        qDebug() << "NocaiDirectPrintClient: keeping the active ARM SDK session; printer refresh is already satisfied.";
+        return true;
+    }
+#endif
 
     // The vendor demo always treats a new search as the start of a fresh
     // Search -> Select -> Connect sequence.
@@ -543,30 +531,96 @@ bool NocaiDirectPrintClient::connectPrinter()
     if (!ensureLoaded() || !requireFunction(reinterpret_cast<const void*>(m_connectPrinter), "ConnectPrinter"))
         return false;
 
-    if (m_selectedPrinterIndex < 0) {
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+    // ConnectPrinter is controller initialization, not a per-operation socket
+    // open. Calling it twice can fail with "open socket fail" even while the
+    // session established by the first call remains usable.
+    if (m_connected) {
+        m_lastError.clear();
+        qDebug() << "NocaiDirectPrintClient: ARM SDK session is already connected; skipped duplicate ConnectPrinter.";
+        return true;
+    }
+#endif
+
+    const auto selectKnownPrinter = [&]() {
+        if (m_selectedPrinterIndex >= 0)
+            return true;
+
         if (m_printers.size() != 1) {
             setError(m_printers.isEmpty()
                          ? QStringLiteral("Search for an SDK printer before connecting.")
                          : QStringLiteral("Select an SDK printer before connecting."));
-            emit statusChanged();
             return false;
         }
 
         const int onlyIndex = m_printers.first().toMap().value(QStringLiteral("index"), 0).toInt();
-        if (!choosePrinter(onlyIndex))
-            return false;
+        return choosePrinter(onlyIndex);
+    };
+
+    if (!selectKnownPrinter()) {
+        emit statusChanged();
+        return false;
     }
 
     bool ok = false;
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+    QString promiscuousDetail;
+    if (!NocaiArmCommandTagCompatibility::ensurePromiscuousReceive(
+            m_library, m_selectedPrinterIndex, &promiscuousDetail)) {
+        setError(QStringLiteral(
+                     "PrintFlow could not prepare the ARM printer interface: %1. "
+                     "Confirm the selected Ethernet interface still owns its link-local address and run "
+                     "'sudo setcap cap_net_raw+ep <absolute-path-to-PrintFlowPrinterService>' "
+                     "after the final rebuild.")
+                     .arg(promiscuousDetail));
+        emit statusChanged();
+        return false;
+    }
+    qDebug().noquote()
+        << "NocaiDirectPrintClient: promiscuous receive preflight:"
+        << promiscuousDetail;
+
+    QString localLockDetail;
+    if (!NocaiArmCommandTagCompatibility::clearStaleLocalSocketLocks(
+            m_library, m_selectedPrinterIndex, &localLockDetail)) {
+        setError(QStringLiteral(
+                     "PrintFlow could not safely claim the ARM printer socket: %1")
+                     .arg(localLockDetail));
+        emit statusChanged();
+        return false;
+    }
+    qDebug().noquote()
+        << "NocaiDirectPrintClient: local socket preflight:"
+        << localLockDetail;
+#endif
     withSdkWorkingDirectory([&]() {
-        ok = callSucceeded(m_connectPrinter(), "ConnectPrinter");
+        const int result = m_connectPrinter();
+        ok = callSucceeded(result, "ConnectPrinter");
         return ok;
     });
-    m_connected = ok;
-    if (!ok)
+
+    if (!ok) {
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+        // OpenSocket can leave its receiver/importer between close and reopen
+        // after a failed handshake. Close the local importer exactly once;
+        // do not start an automatic Connect loop against the controller.
+        closeArmControlSocket(QStringLiteral("failed ConnectPrinter"));
+#endif
         m_selectedPrinterIndex = -1;
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+        setError(QStringLiteral(
+            "The printer was discovered and selected, but the ARM SDK could not initialize its socket. Its local control socket was reset. If the printer was just powered on, wait 60 seconds and try Connect once more. If another SDK process connected successfully and then exited, reset the printer before connecting a new owner. Automatic reconnect loops are disabled."));
+#endif
+    }
+    m_connected = ok;
     emit statusChanged();
     return ok;
+}
+
+bool NocaiDirectPrintClient::resetSdkSession()
+{
+    QMutexLocker locker(&m_mutex);
+    return unloadSdkSession();
 }
 
 bool NocaiDirectPrintClient::wipePrintHead(int printHeadMask)
@@ -766,6 +820,153 @@ bool NocaiDirectPrintClient::printNozzleCheck()
     return printAlignmentPattern(0);
 }
 
+bool NocaiDirectPrintClient::startMaintenanceAction(
+    const QString& action, const QVariantMap& arguments)
+{
+    if (m_maintenanceBusy) {
+        setError(QStringLiteral(
+            "A printer maintenance operation is already running."));
+        emit statusChanged();
+        return false;
+    }
+
+    const QString normalizedAction = action.trimmed();
+    if (normalizedAction.isEmpty()) {
+        setError(QStringLiteral("Printer maintenance action is empty."));
+        emit statusChanged();
+        return false;
+    }
+
+    m_currentMaintenanceAction = normalizedAction;
+    m_maintenanceBusy = true;
+    emit maintenanceBusyChanged();
+    m_maintenanceWatcher.setFuture(QtConcurrent::run(
+        [this, normalizedAction, arguments]() {
+            return executeMaintenanceAction(normalizedAction, arguments);
+        }));
+    return true;
+}
+
+QVariantMap NocaiDirectPrintClient::executeMaintenanceActionNow(
+    const QString& action, const QVariantMap& arguments)
+{
+    return executeMaintenanceAction(action.trimmed(), arguments);
+}
+
+QVariantMap NocaiDirectPrintClient::executeMaintenanceAction(
+    const QString& action, const QVariantMap& arguments)
+{
+    QVariant result;
+    bool ok = false;
+
+    if (action == QLatin1String("ConnectPrinter")) {
+        ok = refreshPrinters();
+        const int selectedIndex = arguments.value(
+            QStringLiteral("printerIndex"), -1).toInt();
+        if (ok && selectedIndex >= 0)
+            ok = choosePrinter(selectedIndex);
+        if (ok)
+            ok = connectPrinter();
+    } else if (action == QLatin1String("PrintNozzleCheck")) {
+        ok = printNozzleCheck();
+    } else if (action == QLatin1String("StartCleanOperation")) {
+        ok = startCleanOperation(arguments.value(QStringLiteral("headMask")).toInt());
+    } else if (action == QLatin1String("WipePrintHead")) {
+        ok = wipePrintHead(arguments.value(QStringLiteral("headMask")).toInt());
+    } else if (action == QLatin1String("StartPump")) {
+        ok = startPump(arguments.value(QStringLiteral("headMask")).toInt());
+    } else if (action == QLatin1String("StopPumpOperation")) {
+        ok = stopPumpOperation();
+    } else if (action == QLatin1String("StartFlashSpray")) {
+        ok = spitPrintHead(arguments.value(QStringLiteral("headMask")).toInt());
+    } else if (action == QLatin1String("StopFlashSpray")) {
+        ok = stopSpitOperation();
+    } else if (action == QLatin1String("CapPrintHead")) {
+        ok = capPrintHead();
+    } else if (action == QLatin1String("MoveAxis")) {
+        ok = moveAxis(arguments.value(QStringLiteral("axis")).toInt(),
+                      arguments.value(QStringLiteral("direction")).toInt());
+    } else if (action == QLatin1String("StopAxis")) {
+        const QVariantMap value = stopAxis(
+            arguments.value(QStringLiteral("axis")).toInt());
+        ok = value.value(QStringLiteral("ok")).toBool();
+        result = value;
+    } else if (action == QLatin1String("SaveAxisPos")) {
+        const QVariantMap value = saveAxisPos(
+            arguments.value(QStringLiteral("axis")).toInt());
+        ok = value.value(QStringLiteral("ok")).toBool();
+        result = value;
+    } else if (action == QLatin1String("SetPrintHeight")) {
+        ok = setPrintHeight(arguments.value(QStringLiteral("heightMm")).toDouble());
+    } else if (action == QLatin1String("GetPrintHeight")) {
+        const QVariantMap value = getPrintHeight();
+        ok = value.value(QStringLiteral("ok")).toBool();
+        result = value;
+    } else if (action == QLatin1String("GetJobSettings")) {
+        const QVariantMap value = getJobSettings();
+        ok = value.value(QStringLiteral("ok")).toBool();
+        result = value;
+    } else if (action == QLatin1String("SetJobSettings")) {
+        ok = setJobSettingsFromMap(
+            arguments.value(QStringLiteral("settings")).toMap());
+    } else if (action == QLatin1String("GetAlignmentValues")) {
+        const QVariantMap value = getAlignmentValues();
+        ok = value.value(QStringLiteral("ok")).toBool();
+        result = value;
+    } else if (action == QLatin1String("SetAlignmentValues")) {
+        ok = setAlignmentValues(
+            arguments.value(QStringLiteral("settings")).toMap(),
+            arguments.value(QStringLiteral("type")).toInt());
+    } else if (action == QLatin1String("PrintAlignmentPattern")) {
+        ok = printAlignmentPattern(
+            arguments.value(QStringLiteral("type")).toInt());
+    } else if (action == QLatin1String("SetPrintXYValue")) {
+        ok = setPrintXYValue(
+            arguments.value(QStringLiteral("xMm")).toInt(),
+            arguments.value(QStringLiteral("yMm")).toInt());
+    } else if (action == QLatin1String("GetPrintXYValue")) {
+        const QVariantMap value = getPrintXYValue();
+        ok = value.value(QStringLiteral("ok")).toBool();
+        result = value;
+    } else if (action == QLatin1String("GetUVParamValues")) {
+        const QVariantMap value = getUVParamValues();
+        ok = value.value(QStringLiteral("ok")).toBool();
+        result = value;
+    } else if (action == QLatin1String("SetUVParamValues")) {
+        ok = setUVParamValues(
+            arguments.value(QStringLiteral("settings")).toMap(),
+            arguments.value(QStringLiteral("type")).toInt());
+    } else if (action == QLatin1String("GetSupportNewUVParamFunction")) {
+        const int support = getSupportNewUVParamFunction();
+        ok = support >= 0;
+        result = support;
+    } else if (action == QLatin1String("SetNewUVParamFunction")) {
+        ok = setNewUVParamFunction(
+            arguments.value(QStringLiteral("type")).toInt());
+    } else if (action == QLatin1String("GetNewUVParamValues")) {
+        const QVariantMap value = getNewUVParamValues();
+        ok = value.value(QStringLiteral("ok")).toBool();
+        result = value;
+    } else if (action == QLatin1String("SetNewUVParamValues")) {
+        ok = setNewUVParamValues(
+            arguments.value(QStringLiteral("settings")).toMap(),
+            arguments.value(QStringLiteral("type")).toInt());
+    } else if (action == QLatin1String("ExportConfigFile")) {
+        ok = exportConfigFile(arguments.value(QStringLiteral("path")).toString());
+    } else if (action == QLatin1String("ImportConfigFile")) {
+        ok = importConfigFile(arguments.value(QStringLiteral("path")).toString());
+    } else {
+        QMutexLocker locker(&m_mutex);
+        setError(QStringLiteral("Unknown printer maintenance action: %1").arg(action));
+    }
+
+    QVariantMap completion;
+    completion.insert(QStringLiteral("ok"), ok);
+    completion.insert(QStringLiteral("result"), result);
+    completion.insert(QStringLiteral("error"), ok ? QString() : lastError());
+    return completion;
+}
+
 QVariantMap NocaiDirectPrintClient::getPrinterStatus()
 {
     QMutexLocker locker(&m_mutex);
@@ -951,14 +1152,27 @@ QString NocaiDirectPrintClient::controllerErrorDetails() const
 bool NocaiDirectPrintClient::submitPreparedJob(const DirectPrintRaster& raster,
                                                const DirectPrintSettings& settings)
 {
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+    // Keep the ARM X-33 job in the process that already owns the successful
+    // PrinterSocket session. The controller does not accept an immediate
+    // reconnect after that session is released, and this vendor library is
+    // ELF NODELETE, so handing the job to a new process reliably loses the
+    // usable connection. The x86 SDK remains isolated below because its native
+    // swath formatter has been observed crashing instead of returning errors.
+    qDebug() << "NocaiDirectPrintClient: reusing the active ARM SDK session for raster upload.";
+    return printPackedJob(raster, settings);
+#else
     // The supplied x64 SDK performs swath formatting in native code and has
     // been observed faulting instead of returning an error. Keep that failure
     // outside the GUI process. Tests and the worker itself use the direct path.
-    if (QCoreApplication::applicationName() == QStringLiteral("PrintFlow") &&
+    if ((QCoreApplication::applicationName() == QStringLiteral("PrintFlow") ||
+         QCoreApplication::applicationName() ==
+             QStringLiteral("PrintFlowPrinterService")) &&
         !qEnvironmentVariableIsSet("PRINTFLOW_NOCAI_WORKER")) {
         return submitPreparedJobIsolated(raster, settings);
     }
     return printPackedJob(raster, settings);
+#endif
 }
 
 bool NocaiDirectPrintClient::submitPreparedJobIsolated(
@@ -1036,6 +1250,17 @@ bool NocaiDirectPrintClient::submitPreparedJobIsolated(
         setError("Could not serialize the isolated direct-print job.");
         return false;
     }
+
+    // PrinterSocket maintains process-local receive state, but the X-33 only
+    // accepts one active SDK command session reliably. Printer Setup may have
+    // connected this GUI process already; release that session before the
+    // isolated worker performs its own Search -> Choose -> Connect lifecycle.
+    // Leaving both SDK copies loaded races their raw-socket receivers and makes
+    // the worker fail in OpenSocket before Command 3.
+    if (!unloadSdkSession())
+        return false;
+    emit statusChanged();
+    qDebug() << "NocaiDirectPrintClient: released GUI SDK session for isolated print worker.";
 
     QProcess worker;
     worker.setProgram(QCoreApplication::applicationFilePath());
@@ -1228,7 +1453,18 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
         }
         static_assert(sizeof(prop) == sizeof(raster.canonicalHeader),
                       "X-33 SDK header must remain exactly 48 bytes.");
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+        // The known-good ARM debugger follows the vendor demo: its packed PRN
+        // header has uint16 Colors/Bits, while API_StartPrint expects those as
+        // separate uint32 members. A raw memcpy produced Bits=1/VsdMode=0;
+        // widening the packed fields produces the proven Bits=0/VsdMode=1.
+        const auto sdkHeader = NocaiPrnWriter::makeStandardX33SdkHeader(
+            raster.canonicalHeader);
+        std::memcpy(&prop, sdkHeader.data(), sizeof(prop));
+#else
+        // Preserve the proven x86-64 ABI mapping.
         std::memcpy(&prop, raster.canonicalHeader.data(), sizeof(prop));
+#endif
     } else {
         prop.Signature = kPrintSignature;
         prop.XDPI = static_cast<uint32_t>(std::max(1, raster.xdpi));
@@ -1261,37 +1497,40 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
         << ", colors=" << prop.Colors
         << ", bits=" << prop.Bits
         << ", pass=" << prop.Pass
+        << ", vsdMode=" << prop.VsdMode
         << ", headSelect=" << jobSettings.HeadSelect
         << ", direction=" << jobSettings.PrintDirection;
+
+    // Printer Setup normally establishes this lifecycle. A job submitted
+    // directly after application startup must establish it once here rather
+    // than selecting or connecting without a preceding search.
+    if (!m_connected && m_printers.isEmpty() && !refreshPrinters())
+        return false;
+
+    int printerIndex = settings.printerIndex;
+    if (printerIndex < 0) {
+        if (m_selectedPrinterIndex >= 0) {
+            printerIndex = m_selectedPrinterIndex;
+        } else if (m_printers.size() == 1) {
+            printerIndex = m_printers.first().toMap()
+                               .value(QStringLiteral("index"), 0).toInt();
+        } else {
+            setError("No SDK printer is selected for direct printing.");
+            return false;
+        }
+    }
+
+    if (printerIndex != m_selectedPrinterIndex && !choosePrinter(printerIndex))
+        return false;
+
+    // Use the same connection path as Printer Setup. Search and selection were
+    // established above, so Connect completes the documented lifecycle once.
+    if (!m_connected && !connectPrinter())
+        return false;
+
     bool ok = false;
 
     withSdkWorkingDirectory([&]() {
-        if (settings.printerIndex < 0 && m_selectedPrinterIndex < 0) {
-            if (m_printers.size() != 1) {
-                setError("No SDK printer is selected for direct printing.");
-                return false;
-            }
-            const int onlyIndex = m_printers.first().toMap()
-                                      .value(QStringLiteral("index"), 0).toInt();
-            if (!callSucceeded(m_choosePrinter(onlyIndex), "ChoosePrinter"))
-                return false;
-            m_selectedPrinterIndex = onlyIndex;
-            m_connected = false;
-        }
-
-        if (settings.printerIndex >= 0 && settings.printerIndex != m_selectedPrinterIndex) {
-            if (!callSucceeded(m_choosePrinter(settings.printerIndex), "ChoosePrinter"))
-                return false;
-            m_selectedPrinterIndex = settings.printerIndex;
-            m_connected = false;
-        }
-
-        if (!m_connected && m_connectPrinter) {
-            if (!callSucceeded(m_connectPrinter(), "ConnectPrinter"))
-                return false;
-            m_connected = true;
-        }
-
         if (settings.mediaHeightMm >= 0.0) {
             if (!requireFunction(reinterpret_cast<const void*>(m_setPrintHeight),
                                  "SetPrintHeight") ||
@@ -1329,17 +1568,30 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                      << settings.mediaHeightMm << "mm.";
         }
 
-        if (!callSucceeded(m_setJobSettings(&jobSettings, sizeof(JobSettings)), "SetJobSettings"))
-            return false;
-
-        if (!callSucceeded(m_initPrinter(), "InitPrinter"))
-            return false;
-
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
         if (raster.format == DirectPrintRasterFormat::NocaiX33Standard) {
-            // The working X-33 sequence is InitPrinter -> SetPrintXYValue ->
-            // StartPrint. A post-StartPrint setter interrupts the active data
-            // connection, while a pre-Init setter can be superseded. The SDK
-            // consumes uint32 hundredths of a millimeter without scaling.
+            // The ARM vendor documentation classifies SetJobSettings as a
+            // persistent engine-parameter write, not as part of the print
+            // lifecycle, and notes that parameter changes require the client
+            // to reconnect. Calling it after ConnectPrinter makes the X-33
+            // attempt repeated Command 205 connections, then invalidates the
+            // otherwise healthy session. Preserve the engine's configured
+            // parameters and follow the supplied ARM demo's print sequence:
+            // InitPrinter -> StartPrint -> data -> EndPrint -> ClosePrint.
+            qDebug() << "NocaiDirectPrintClient: preserving ARM X-33 engine job settings for this upload.";
+        } else
+#endif
+        {
+            if (!callSucceeded(
+                    m_setJobSettings(&jobSettings, sizeof(JobSettings)),
+                    "SetJobSettings")) {
+                return false;
+            }
+        }
+
+        const auto prepareX33PrintOrigin = [&]() {
+            // The SDK consumes uint32 hundredths of a millimeter without
+            // scaling. Keep this operation outside the active data connection.
             if (!requireFunction(reinterpret_cast<const void*>(m_setPrintXYValue),
                                  "SetPrintXYValue") ||
                 !requireFunction(reinterpret_cast<const void*>(m_getPrintXYValue),
@@ -1350,15 +1602,50 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                 settings.printOffsetXmm);
             const uint32_t expectedY = millimetersToPrintXYUnits(
                 settings.printOffsetYmm);
-            if (!callSucceeded(m_setPrintXYValue(expectedX, expectedY),
-                               "SetPrintXYValue"))
-                return false;
-
             uint32_t actualX = 0;
             uint32_t actualY = 0;
             if (!callSucceeded(m_getPrintXYValue(&actualX, &actualY),
                                "GetPrintXYValue"))
                 return false;
+
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+            // Both the getter and setter use separate Command-205 socket
+            // sessions. No SDK operation may sit between InitPrinter and
+            // StartPrint on this ARM build: even a read-only zero-to-zero
+            // origin check can make the following Command-2 socket fail with
+            // CreateConnection Fail. Complete and settle origin handling
+            // first, then preserve the supplied demo's uninterrupted
+            // InitPrinter -> StartPrint boundary.
+            const bool originChanged = actualX != expectedX || actualY != expectedY;
+            if (originChanged) {
+                if (!callSucceeded(m_setPrintXYValue(expectedX, expectedY),
+                                   "SetPrintXYValue"))
+                    return false;
+                actualX = 0;
+                actualY = 0;
+                if (!callSucceeded(m_getPrintXYValue(&actualX, &actualY),
+                                   "GetPrintXYValue after SetPrintXYValue"))
+                    return false;
+            } else {
+                qDebug() << "NocaiDirectPrintClient: ARM X-33 origin already active; skipped the disruptive SDK setter.";
+            }
+
+            // The last origin API has returned, but its PrinterSocket worker
+            // closes asynchronously. Give it a quiet interval before Init.
+            QThread::msleep(1000);
+            qDebug() << "NocaiDirectPrintClient: settled ARM X-33 origin socket before InitPrinter.";
+#else
+            // Preserve the physically validated x86-64 sequence. That SDK's
+            // per-job origin path was proven with the legacy print pipeline.
+            if (!callSucceeded(m_setPrintXYValue(expectedX, expectedY),
+                               "SetPrintXYValue"))
+                return false;
+            actualX = 0;
+            actualY = 0;
+            if (!callSucceeded(m_getPrintXYValue(&actualX, &actualY),
+                               "GetPrintXYValue after SetPrintXYValue"))
+                return false;
+#endif
             if (actualX != expectedX || actualY != expectedY) {
                 setError(QStringLiteral(
                     "Printer rejected the per-job origin %1 x %2 mm (raw %3 x %4); it reported raw %5 x %6.")
@@ -1374,11 +1661,48 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                      << std::max(0, settings.printOffsetXmm) << "x"
                      << std::max(0, settings.printOffsetYmm) << "mm (raw"
                      << expectedX << "x" << expectedY << ").";
-        }
+            return true;
+        };
 
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+        const bool armOriginRequested = settings.printOffsetXmm != 0 ||
+                                        settings.printOffsetYmm != 0;
+        if (raster.format == DirectPrintRasterFormat::NocaiX33Standard &&
+            armOriginRequested &&
+            !prepareX33PrintOrigin()) {
+            return false;
+        }
+        if (raster.format == DirectPrintRasterFormat::NocaiX33Standard &&
+            !armOriginRequested) {
+            // The successful ARM debugger upload performed no Command-205
+            // origin transaction. A zero-offset job must preserve that exact
+            // InitPrinter -> StartPrint boundary rather than opening an extra
+            // PrinterSocket session merely to confirm zero values.
+            qDebug() << "NocaiDirectPrintClient: no ARM X-33 origin override requested; skipped origin socket transaction.";
+        }
+#endif
+
+        if (!callSucceeded(m_initPrinter(), "InitPrinter"))
+            return false;
+
+#if !defined(__aarch64__) || !defined(Q_OS_LINUX) || defined(Q_OS_ANDROID)
+        if (raster.format == DirectPrintRasterFormat::NocaiX33Standard &&
+            !prepareX33PrintOrigin()) {
+            return false;
+        }
+#endif
+
+        // Match the successful debugger lifecycle exactly. Retrying StartPrint
+        // on the same controller session caused the ARM SDK to accumulate
+        // failed data sockets and made later ConnectPrinter calls fail.
         if (!callSucceeded(m_startPrint(&prop), "StartPrint")) {
-            m_connected = false;
             m_closePrint();
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+            setError(QStringLiteral(
+                "StartPrint could not open its data channel. The active ARM control session was preserved; no automatic reconnect was attempted."));
+#else
+            m_connected = false;
+#endif
             return false;
         }
         if (m_sdkJobProperty) {
@@ -1427,12 +1751,19 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                     reinterpret_cast<char*>(const_cast<uint8_t*>(line.data())),
                     prop.BytesPerLine);
                 if (bytesWritten != static_cast<int>(prop.BytesPerLine)) {
-                    setError(QStringLiteral(
-                        "PrintALine failed at row %1 plane %2: SDK consumed %3 of %4 bytes.")
-                                 .arg(row + 1)
-                                 .arg(plane + 1)
-                                 .arg(bytesWritten)
-                                 .arg(prop.BytesPerLine));
+                    if (bytesWritten == -1) {
+                        setError(QStringLiteral(
+                            "PrintALine was canceled before row %1 plane %2 was accepted; the SDK had already latched its internal print-cancel state after StartPrint.")
+                                     .arg(row + 1)
+                                     .arg(plane + 1));
+                    } else {
+                        setError(QStringLiteral(
+                            "PrintALine failed at row %1 plane %2: SDK returned %3; expected %4 bytes accepted.")
+                                     .arg(row + 1)
+                                     .arg(plane + 1)
+                                     .arg(bytesWritten)
+                                     .arg(prop.BytesPerLine));
+                    }
                     m_abortPrint();
                     m_closePrint();
                     return false;
@@ -1464,6 +1795,101 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
 
     emit statusChanged();
     return ok;
+}
+
+bool NocaiDirectPrintClient::closeArmControlSocket(const QString& reason)
+{
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+    if (!m_library.isLoaded() || !m_closeControlSocket)
+        return false;
+
+    qDebug() << "NocaiDirectPrintClient: closing validated ARM control socket after"
+             << reason << ".";
+    m_closeControlSocket(0);
+    m_connected = false;
+    m_selectedPrinterIndex = -1;
+    return true;
+#else
+    Q_UNUSED(reason);
+    return false;
+#endif
+}
+
+bool NocaiDirectPrintClient::unloadSdkSession()
+{
+    // QLibrary::unload/dlclose is not a reliable substitute for the ARM
+    // importer's persistent socket close (the paired socket library is
+    // NODELETE).  Close it while its validated function pointer and receiver
+    // thread are still alive.
+    closeArmControlSocket(QStringLiteral("SDK session shutdown"));
+    NocaiArmCommandTagCompatibility::uninstall(this);
+    NocaiDirectPrintCompatibility::uninstall(this);
+
+    bool unloaded = true;
+    if (m_library.isLoaded())
+        unloaded = m_library.unload();
+
+    m_symbolsResolved = false;
+    m_selectedPrinterIndex = -1;
+    m_connected = false;
+    m_printers.clear();
+
+    m_searchPrinter = nullptr;
+    m_choosePrinter = nullptr;
+    m_continuePrint = nullptr;
+    m_initPrinter = nullptr;
+    m_startPrint = nullptr;
+    m_printALine = nullptr;
+    m_abortPrint = nullptr;
+    m_pausePrint = nullptr;
+    m_endPrint = nullptr;
+    m_closePrint = nullptr;
+    m_setJobSettings = nullptr;
+    m_getJobSettings = nullptr;
+    m_connectPrinter = nullptr;
+    m_wipePrintHead = nullptr;
+    m_startCleanOperation = nullptr;
+    m_startPump = nullptr;
+    m_stopPumpOperation = nullptr;
+    m_spitPrintHead = nullptr;
+    m_stopSpitOperation = nullptr;
+    m_capPrintHead = nullptr;
+    m_moveAxis = nullptr;
+    m_stopAxis = nullptr;
+    m_saveAxisPos = nullptr;
+    m_setPrintHeight = nullptr;
+    m_getPrintHeight = nullptr;
+    m_setAlignmentValues = nullptr;
+    m_getAlignmentValues = nullptr;
+    m_exportConfigFile = nullptr;
+    m_importConfigFile = nullptr;
+    m_printAlignmentPattern = nullptr;
+    m_getPrinterStatus = nullptr;
+    m_getPrinterInfo = nullptr;
+    m_setPrintXYValue = nullptr;
+    m_getPrintXYValue = nullptr;
+    m_setUVParamValues = nullptr;
+    m_getUVParamValues = nullptr;
+    m_getSupportNewUVParamFunction = nullptr;
+    m_setNewUVParamFunction = nullptr;
+    m_setNewUVParamValues = nullptr;
+    m_getNewUVParamValues = nullptr;
+    m_closeControlSocket = nullptr;
+
+    m_currentErrorInfo = nullptr;
+    m_sdkJobProperty = nullptr;
+    m_sdkPrinterError = nullptr;
+    m_sdkNetError = nullptr;
+    m_sdkUartError = nullptr;
+    m_sdkErrorSlice = nullptr;
+    m_sdkErrorSwath = nullptr;
+
+    if (!unloaded) {
+        setError(QStringLiteral(
+            "Could not release the GUI direct-print SDK session before starting the isolated worker: %1")
+                     .arg(m_library.errorString()));
+    }
+    return unloaded;
 }
 
 bool NocaiDirectPrintClient::ensureLoaded()
@@ -1498,9 +1924,18 @@ bool NocaiDirectPrintClient::ensureLoaded()
         }
     }
 
+    QString armCompatibilityError;
+    if (!NocaiArmCommandTagCompatibility::install(
+            this, m_library, &armCompatibilityError)) {
+        setError(armCompatibilityError);
+        m_library.unload();
+        return false;
+    }
+
     m_resolvedSdkRoot = root;
     m_symbolsResolved = resolveSymbols();
     if (!m_symbolsResolved) {
+        NocaiArmCommandTagCompatibility::uninstall(this);
         NocaiDirectPrintCompatibility::uninstall(this);
         m_library.unload();
         m_resolvedSdkRoot.clear();
@@ -1584,6 +2019,17 @@ bool NocaiDirectPrintClient::resolveSymbols()
     resolveOptional(m_setNewUVParamValues, "SetNewUVParamValues", "_Z23API_SetNewUVParamValuesP18stNewUVParamValues21eNewUVParamValueTypesi");
     resolveOptional(m_getNewUVParamValues, "GetNewUVParamValues", "_Z23API_GetNewUVParamValuesP18stNewUVParamValuesi");
 
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+    // Internal vendor lifecycle hook, guarded by the same exact ARM Build ID
+    // and instruction validation required by NocaiArmCommandTagCompatibility.
+    // Net_CloseSock_Car ignores its int argument and routes through the API's
+    // persistent PrinterSocketDLLImporter::CloseSocket implementation.
+    const bool armControlCloseResolved = resolve(
+        m_closeControlSocket, "Net_CloseSock_Car", "_Z17Net_CloseSock_Cari");
+#else
+    const bool armControlCloseResolved = true;
+#endif
+
     const bool requiredSymbolsResolved =
         resolve(m_searchPrinter, "SearchPrinter", "_Z17API_SearchPrinterP15PrinterInfoListi") &&
         resolve(m_choosePrinter, "ChoosePrinter", "_Z17API_SelectPrinteri") &&
@@ -1595,9 +2041,15 @@ bool NocaiDirectPrintClient::resolveSymbols()
         resolve(m_pausePrint, "PausePrint", "_Z14API_PausePrintv") &&
         resolve(m_endPrint, "EndPrint", "_Z12API_EndPrintv") &&
         resolve(m_closePrint, "ClosePrint", "_Z14API_ClosePrintv") &&
-        resolve(m_setJobSettings, "SetJobSettings", "_Z18API_SetJobSettingsP13stJobSettingsi");
+        resolve(m_setJobSettings, "SetJobSettings", "_Z18API_SetJobSettingsP13stJobSettingsi") &&
+        armControlCloseResolved;
 
-    if (requiredSymbolsResolved && usedCompatibilitySymbols) {
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+    const bool requiresHostCallbacks = true;
+#else
+    const bool requiresHostCallbacks = usedCompatibilitySymbols;
+#endif
+    if (requiredSymbolsResolved && requiresHostCallbacks) {
         const NocaiDirectPrintCompatibility::Callbacks callbacks{
             reinterpret_cast<NocaiDirectPrintCompatibility::StartPrintFn>(m_startPrint),
             reinterpret_cast<NocaiDirectPrintCompatibility::PrintALineFn>(m_printALine),
@@ -1605,7 +2057,7 @@ bool NocaiDirectPrintClient::resolveSymbols()
             m_closePrint
         };
         if (!NocaiDirectPrintCompatibility::install(this, callbacks)) {
-            setError("Failed to install the Linux x86-64 direct-print compatibility callbacks.");
+            setError("Failed to install the Linux direct-print SDK host callbacks.");
             return false;
         }
     }
@@ -1638,8 +2090,6 @@ QStringList NocaiDirectPrintClient::sdkRootCandidates() const
 #if defined(Q_OS_ANDROID)
     roots << QDir(QCoreApplication::applicationDirPath()).absoluteFilePath("lib");
 #endif
-    roots << QDir(QCoreApplication::applicationDirPath()).absoluteFilePath("DemoForARM64Linux-260612/Demo260612");
-    roots << QDir::current().absoluteFilePath("DemoForARM64Linux-260612/Demo260612");
     return roots;
 }
 

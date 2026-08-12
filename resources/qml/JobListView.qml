@@ -120,6 +120,33 @@ Item {
         }
     }
 
+    function beginOutputProgress(mode) {
+        appState.outputProgressMode = mode
+        appState.outputProgressPhase = "rasterizing"
+        appState.isGeneratingPRN = true
+    }
+
+    function endOutputProgress() {
+        appState.isGeneratingPRN = false
+        appState.outputProgressPhase = ""
+        appState.outputProgressMode = ""
+    }
+
+    function outputProgressText() {
+        switch (appState.outputProgressPhase) {
+        case "generatingPrn":
+            return strings.trKey("jobs.progress.generatingPrn")
+        case "printing":
+            return strings.trKey("jobs.progress.printing")
+        case "rasterizing":
+            return strings.trKey("jobs.progress.rasterizing")
+        default:
+            return appState.outputProgressMode === "direct"
+                    ? strings.trKey("jobs.progress.preparingPrint")
+                    : strings.trKey("jobs.progress.preparingPrn")
+        }
+    }
+
     function languageDisplayName(code) {
         if (code === "zh-Hans")
             return strings.trKey("language.chineseSimplified")
@@ -201,7 +228,7 @@ Item {
         var directJob = Object.assign({}, job)
         directJob.inkMode = appState.multiInkInkMode
         directJob.directPrintSettings = directPrintSettings()
-        appState.isGeneratingPRN = true
+        beginOutputProgress("direct")
         if (appState.usingMultiInkPrinter) {
             console.log("Routing to the newer-model MultiInk SDK backend with inkMode =", appState.multiInkInkMode)
             printJobMultiInk.runDirectPrint(directJob)
@@ -239,7 +266,7 @@ Item {
 		if (!appState.isGeneratingPRN)
 			return
 
-		appState.isGeneratingPRN = false
+		endOutputProgress()
 
 		if (success) {
             if (appState.usingSimulatedPrinter && appState.multiInkOutputMode === "direct") {
@@ -961,12 +988,12 @@ Item {
                 const outputPath = file
                 const job = jobModel.getJob(selectedIndexes[0])
 
-                appState.isGeneratingPRN = true
+				root.beginOutputProgress("prn")
 				
 				if (appState.usingMultiInkPrinter == true) {
                     if (!appState.supportsRipProcessing) {
                         toast.show(strings.trKey("jobs.toast.prnUnavailable"))
-                        appState.isGeneratingPRN = false
+                        root.endOutputProgress()
                         return
                     }
 
@@ -983,7 +1010,7 @@ Item {
 				else {
                     if (!appState.supportsRipProcessing) {
                         toast.show(strings.trKey("jobs.toast.prnUnavailable"))
-                        appState.isGeneratingPRN = false
+                        root.endOutputProgress()
                         return
                     }
 
@@ -997,6 +1024,11 @@ Item {
 		Connections {
 			target: printJobCMYK
 
+			function onOutputPhaseChanged(phase) {
+				if (appState.isGeneratingPRN)
+					appState.outputProgressPhase = phase
+			}
+
 			function onPrnGenerationFinished(success) {
 				root.handlePrnFinished(success)
 			}
@@ -1004,6 +1036,11 @@ Item {
 
 		Connections {
 			target: printJobMultiInk
+
+			function onOutputPhaseChanged(phase) {
+				if (appState.isGeneratingPRN)
+					appState.outputProgressPhase = phase
+			}
 
 			function onPrnGenerationFinished(success) {
 				root.handlePrnFinished(success)
@@ -1065,7 +1102,7 @@ Item {
 			}
 
             Text {
-                text: strings.trKey("jobs.rasterizing")
+                text: root.outputProgressText()
                 anchors.top: parent.verticalCenter
                 anchors.horizontalCenter: parent.horizontalCenter
 				color: theme.subtext

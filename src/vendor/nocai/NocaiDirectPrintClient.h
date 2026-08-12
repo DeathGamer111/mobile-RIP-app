@@ -6,6 +6,7 @@
 #include <QStringList>
 #include <QLibrary>
 #include <QRecursiveMutex>
+#include <QFutureWatcher>
 
 #include <cstdint>
 #include <functional>
@@ -24,6 +25,7 @@ class NocaiDirectPrintClient : public QObject, public IPrintOutputClient
     Q_PROPERTY(bool autoDiscoverSdk READ autoDiscoverSdk WRITE setAutoDiscoverSdk NOTIFY statusChanged)
     Q_PROPERTY(QVariantList printers READ printers NOTIFY printersChanged)
     Q_PROPERTY(QStringList maintenanceSupportedPrinters READ maintenanceSupportedPrinters CONSTANT)
+    Q_PROPERTY(bool maintenanceBusy READ maintenanceBusy NOTIFY maintenanceBusyChanged)
 
 public:
     explicit NocaiDirectPrintClient(QObject* parent = nullptr);
@@ -39,6 +41,7 @@ public:
     void setAutoDiscoverSdk(bool enabled);
     QVariantList printers() const;
     QStringList maintenanceSupportedPrinters() const;
+    bool maintenanceBusy() const;
 
     Q_INVOKABLE QVariantList searchPrinters();
     Q_INVOKABLE bool supportsMaintenance(const QString& printerName) const;
@@ -49,6 +52,9 @@ public:
     Q_INVOKABLE bool continuePrint();
     Q_INVOKABLE QString statusText();
     Q_INVOKABLE bool connectPrinter();
+    // Explicit service-side recovery hook. Normal GUI restarts must keep the
+    // active SDK session; this is reserved for a user-requested reconnect.
+    bool resetSdkSession();
     Q_INVOKABLE bool wipePrintHead(int printHeadMask);
     Q_INVOKABLE bool startCleanOperation(int printHeadMask);
     Q_INVOKABLE bool startPump(int printHeadMask);
@@ -79,6 +85,14 @@ public:
     Q_INVOKABLE bool setNewUVParamFunction(int type);
     Q_INVOKABLE QVariantMap getNewUVParamValues();
     Q_INVOKABLE bool setNewUVParamValues(const QVariantMap& settings, int type);
+    Q_INVOKABLE bool startMaintenanceAction(const QString& action,
+                                             const QVariantMap& arguments = {});
+
+    // Synchronous service-side dispatcher. The GUI facade keeps the existing
+    // asynchronous startMaintenanceAction contract while the persistent
+    // printer service serializes the actual SDK call in its sole-owner process.
+    QVariantMap executeMaintenanceActionNow(const QString& action,
+                                             const QVariantMap& arguments = {});
 
     bool submitPreparedJob(const DirectPrintRaster& raster,
                            const DirectPrintSettings& settings) override;
@@ -89,6 +103,10 @@ public:
 signals:
     void statusChanged();
     void printersChanged();
+    void maintenanceBusyChanged();
+    void maintenanceActionFinished(const QString& action, bool succeeded,
+                                   const QVariant& result,
+                                   const QString& errorMessage);
 
 private:
     struct PrinterInfoList;
@@ -133,8 +151,11 @@ private:
     using SetNewUVParamFunctionFn = int (*)(int);
     using SetNewUVParamValuesFn = int (*)(NewUVParamValues*, int, int);
     using GetNewUVParamValuesFn = int (*)(NewUVParamValues*, int);
+    using CloseControlSocketFn = void (*)(int);
 
     bool ensureLoaded();
+    bool unloadSdkSession();
+    bool closeArmControlSocket(const QString& reason);
     bool resolveSymbols();
     QString resolveSdkRoot() const;
     QStringList sdkRootCandidates() const;
@@ -154,6 +175,8 @@ private:
     QString controllerErrorDetails() const;
     bool submitPreparedJobIsolated(const DirectPrintRaster& raster,
                                    const DirectPrintSettings& settings);
+    QVariantMap executeMaintenanceAction(const QString& action,
+                                         const QVariantMap& arguments);
 
     mutable QRecursiveMutex m_mutex;
     QLibrary m_library;
@@ -165,6 +188,9 @@ private:
     QString m_lastError;
     QVariantList m_printers;
     int m_selectedPrinterIndex = -1;
+    QFutureWatcher<QVariantMap> m_maintenanceWatcher;
+    bool m_maintenanceBusy = false;
+    QString m_currentMaintenanceAction;
 
     SearchPrinterFn m_searchPrinter = nullptr;
     ChoosePrinterFn m_choosePrinter = nullptr;
@@ -206,6 +232,7 @@ private:
     SetNewUVParamFunctionFn m_setNewUVParamFunction = nullptr;
     SetNewUVParamValuesFn m_setNewUVParamValues = nullptr;
     GetNewUVParamValuesFn m_getNewUVParamValues = nullptr;
+    CloseControlSocketFn m_closeControlSocket = nullptr;
 
     // Optional diagnostic data exported by the legacy SDK. CurErrorInfo is
     // the controller's raw 42-byte error response; the remaining values help
