@@ -8,15 +8,6 @@ set(DIRECT_PRINT_SDK_ARCHIVE "$ENV{DIRECT_PRINT_SDK_ARCHIVE}" CACHE FILEPATH
 option(DIRECT_PRINT_SDK_STRICT
     "Fail configuration when a requested direct-print SDK is unusable." OFF)
 
-set(_printflow_legacy_sdk_root
-    "${PROJECT_SOURCE_DIR}/DemoForARM64Linux-260612/Demo260612")
-if(DIRECT_PRINT_SDK_ROOT STREQUAL "${_printflow_legacy_sdk_root}"
-   AND NOT IS_DIRECTORY "${DIRECT_PRINT_SDK_ROOT}")
-    set(DIRECT_PRINT_SDK_ROOT "" CACHE PATH
-        "Extracted vendor direct-print SDK root." FORCE)
-endif()
-unset(_printflow_legacy_sdk_root)
-
 function(_printflow_normalize_sdk_arch raw_arch out_arch out_socket_arch)
     string(TOLOWER "${raw_arch}" arch)
     if(arch MATCHES "^(x86_64|amd64)$")
@@ -37,6 +28,48 @@ function(_printflow_normalize_sdk_arch raw_arch out_arch out_socket_arch)
     set(${out_socket_arch} "${socket_arch}" PARENT_SCOPE)
 endfunction()
 
+function(_printflow_report_sdk_failure message_text)
+    if(DIRECT_PRINT_SDK_STRICT)
+        message(FATAL_ERROR "${message_text}")
+    endif()
+    message(WARNING "${message_text}")
+endfunction()
+
+function(_printflow_find_auto_sdk_archive target_arch out_archive)
+    set(archive_candidates)
+    if(target_arch STREQUAL "x86_64")
+        set(archive_patterns
+            "${PROJECT_SOURCE_DIR}/DemoForX64Linux*.zip"
+            "${PROJECT_SOURCE_DIR}/DemoForX64Linux*.tar"
+            "${PROJECT_SOURCE_DIR}/DemoForX64Linux*.tar.gz")
+    elseif(target_arch STREQUAL "arm64")
+        set(archive_patterns
+            "${PROJECT_SOURCE_DIR}/DemoForARM64Linux*.zip"
+            "${PROJECT_SOURCE_DIR}/DemoForARM64Linux*.tar"
+            "${PROJECT_SOURCE_DIR}/DemoForARM64Linux*.tar.gz")
+    endif()
+    if(archive_patterns)
+        if(CMAKE_SCRIPT_MODE_FILE)
+            file(GLOB archive_candidates ${archive_patterns})
+        else()
+            file(GLOB archive_candidates CONFIGURE_DEPENDS ${archive_patterns})
+        endif()
+    endif()
+
+    list(SORT archive_candidates)
+    list(LENGTH archive_candidates archive_count)
+    if(archive_count GREATER 1)
+        _printflow_report_sdk_failure(
+            "Multiple direct-print SDK archives match ${target_arch}: ${archive_candidates}")
+    endif()
+    if(archive_count GREATER 0)
+        list(GET archive_candidates 0 selected_archive)
+        set(${out_archive} "${selected_archive}" PARENT_SCOPE)
+    else()
+        set(${out_archive} "" PARENT_SCOPE)
+    endif()
+endfunction()
+
 function(_printflow_find_single_file out_var description)
     set(matches)
     foreach(pattern IN LISTS ARGN)
@@ -48,7 +81,8 @@ function(_printflow_find_single_file out_var description)
 
     list(LENGTH matches match_count)
     if(match_count GREATER 1)
-        message(WARNING "Multiple ${description} candidates found; using ${matches}")
+        _printflow_report_sdk_failure(
+            "Multiple ${description} candidates found: ${matches}")
     endif()
     if(match_count GREATER 0)
         list(GET matches 0 selected)
@@ -122,31 +156,16 @@ function(printflow_configure_direct_print_sdk target)
     endif()
 
     if(NOT sdk_root AND NOT sdk_archive AND target_platform STREQUAL "linux")
-        if(target_arch STREQUAL "x86_64")
-            file(GLOB archive_candidates CONFIGURE_DEPENDS
-                "${PROJECT_SOURCE_DIR}/DemoForX64Linux*.zip"
-                "${PROJECT_SOURCE_DIR}/DemoForX64Linux*.tar"
-                "${PROJECT_SOURCE_DIR}/DemoForX64Linux*.tar.gz")
-        elseif(target_arch STREQUAL "arm64")
-            file(GLOB archive_candidates CONFIGURE_DEPENDS
-                "${PROJECT_SOURCE_DIR}/DemoForARM64Linux*.zip"
-                "${PROJECT_SOURCE_DIR}/DemoForARM64Linux*.tar"
-                "${PROJECT_SOURCE_DIR}/DemoForARM64Linux*.tar.gz")
-        endif()
-        list(SORT archive_candidates)
-        list(LENGTH archive_candidates archive_count)
-        if(archive_count GREATER 0)
-            list(GET archive_candidates 0 sdk_archive)
+        _printflow_find_auto_sdk_archive("${target_arch}" sdk_archive)
+        if(sdk_archive)
             message(STATUS "Auto-detected direct-print SDK archive: ${sdk_archive}")
         endif()
     endif()
 
     if(sdk_archive)
         if(NOT EXISTS "${sdk_archive}")
-            if(DIRECT_PRINT_SDK_STRICT)
-                message(FATAL_ERROR "DIRECT_PRINT_SDK_ARCHIVE does not exist: ${sdk_archive}")
-            endif()
-            message(WARNING "Direct-print SDK archive does not exist: ${sdk_archive}")
+            _printflow_report_sdk_failure(
+                "DIRECT_PRINT_SDK_ARCHIVE does not exist: ${sdk_archive}")
             return()
         endif()
 
@@ -158,14 +177,16 @@ function(printflow_configure_direct_print_sdk target)
     endif()
 
     if(NOT sdk_root)
+        if(DIRECT_PRINT_SDK_STRICT)
+            message(FATAL_ERROR
+                "No ${target_platform}/${target_arch} direct-print SDK archive or root was supplied.")
+        endif()
         message(STATUS "No direct-print SDK supplied; direct print will remain unavailable.")
         return()
     endif()
     if(NOT IS_DIRECTORY "${sdk_root}")
-        if(DIRECT_PRINT_SDK_STRICT)
-            message(FATAL_ERROR "DIRECT_PRINT_SDK_ROOT is not a directory: ${sdk_root}")
-        endif()
-        message(WARNING "Direct-print SDK root is not a directory: ${sdk_root}")
+        _printflow_report_sdk_failure(
+            "DIRECT_PRINT_SDK_ROOT is not a directory: ${sdk_root}")
         return()
     endif()
 
@@ -201,30 +222,29 @@ function(printflow_configure_direct_print_sdk target)
     if(NOT sdk_api)
         set(message_text
             "No ${target_platform}/${target_arch} libSYPrintAPIforPROII.so was found under ${sdk_root}.")
-        if(DIRECT_PRINT_SDK_STRICT)
-            message(FATAL_ERROR "${message_text}")
-        endif()
-        message(WARNING "${message_text} Direct print will remain unavailable.")
+        _printflow_report_sdk_failure(
+            "${message_text} Direct print will remain unavailable.")
         return()
     endif()
 
     _printflow_validate_elf_arch("${sdk_api}" "${target_arch}" sdk_api_matches_target)
     if(NOT sdk_api_matches_target)
-        if(DIRECT_PRINT_SDK_STRICT)
-            message(FATAL_ERROR "Direct-print SDK API does not match target architecture.")
-        endif()
-        message(WARNING "Ignoring incompatible direct-print SDK API.")
+        _printflow_report_sdk_failure(
+            "Direct-print SDK API does not match target architecture; ignoring it.")
         return()
     endif()
     if(sdk_socket)
         _printflow_validate_elf_arch("${sdk_socket}" "${target_arch}" sdk_socket_matches_target)
         if(NOT sdk_socket_matches_target)
-            if(DIRECT_PRINT_SDK_STRICT)
-                message(FATAL_ERROR "Direct-print socket does not match target architecture.")
-            endif()
-            message(WARNING "Ignoring incompatible direct-print socket.")
+            _printflow_report_sdk_failure(
+                "Direct-print socket does not match target architecture; ignoring it.")
             set(sdk_socket "")
         endif()
+    endif()
+
+    if(NOT sdk_socket AND DIRECT_PRINT_SDK_STRICT)
+        message(FATAL_ERROR
+            "PrinterSocket library was not found for ${target_platform}/${target_arch}.")
     endif()
 
     if(ANDROID)

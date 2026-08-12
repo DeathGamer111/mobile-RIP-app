@@ -1,4 +1,5 @@
 #include "ImageEditor.h"
+#include "MagickCompatibility.h"
 #include <QDebug>
 #include <QUrl>
 #include <QFile>
@@ -467,7 +468,7 @@ bool ImageEditor::applyImpositionEdits(const QString &imagePath, int offsetX, in
 
         // Create blank canvas
         Image canvas(Geometry(canvasW, canvasH), Color("white"));
-        m_image.matte(true);
+        MagickCompatibility::setAlphaChannel(m_image, true);
         canvas.composite(m_image, offsetX, offsetY, OverCompositeOp);
 
         // === Optional: Draw Text ===
@@ -520,4 +521,3 @@ bool ImageEditor::applyImpositionEdits(const QString &imagePath, int offsetX, in
         return false;
     }
 }
-

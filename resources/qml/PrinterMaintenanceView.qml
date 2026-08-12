@@ -14,10 +14,14 @@ Page {
     readonly property bool maintenanceSupported: nocaiDirectPrint.supportsMaintenance(appState.selectedPrinter)
     readonly property bool controlsEnabled: maintenanceSupported && nocaiDirectPrint.available
     property bool statusPollingEnabled: false
+    property string pendingMaintenanceLabel: ""
+    property bool pendingMaintenancePollAfter: false
+    property bool pendingMaintenanceShowOverlay: false
+    property bool pendingMaintenanceShowToast: true
+    property var pendingMaintenanceCompletion: null
 
     property int headMask: 3
-    property int axis: 0
-    property int axisDirection: 0
+    property int activeMotionAxis: 0
     property real printHeight: 0.0
     property int printX: 0
     property int printY: 0
@@ -94,6 +98,7 @@ Page {
 
     component ActionButton: ThemedButton {
         theme: root.theme
+        enabled: root.controlsEnabled && !nocaiDirectPrint.maintenanceBusy
         Layout.fillWidth: true
         Layout.minimumWidth: 0
         Layout.preferredWidth: 1
@@ -165,67 +170,160 @@ Page {
     }
 
     function updateStatus(silent) {
-        if (!root.controlsEnabled)
+        if (!root.maintenanceSupported || !nocaiDirectPrint.available
+                || nocaiDirectPrint.maintenanceBusy)
             return false;
-        const result = nocaiDirectPrint.getPrinterStatus();
-        root.printerStatus = result;
-        if (result.ok) {
-            root.statusText = "Print: " + root.printStatusText(result.printStatus) + " | Clean: " + root.cleanStatusText(result.cleanStatus);
-            return true;
-        }
-        root.statusText = nocaiDirectPrint.lastError;
-        if (!silent)
-            toast.show(root.statusText);
-        return false;
+        return root.runAsyncAction(
+            "Refresh Printer Status", "GetPrinterStatus", {}, false,
+            function (result, ok) {
+                root.printerStatus = result || ({});
+                if (ok) {
+                    root.statusText = "Print: "
+                        + root.printStatusText(result.printStatus)
+                        + " | Clean: "
+                        + root.cleanStatusText(result.cleanStatus);
+                }
+            }, !silent, !silent);
     }
 
-    function runAction(label, callback, pollAfter) {
+    function runAsyncAction(label, action, arguments, pollAfter, completion,
+                            showOverlay, showToast) {
         if (!root.maintenanceSupported) {
             root.statusText = "Maintenance is not supported for " + appState.selectedPrinter + ".";
             toast.show(root.statusText);
             return false;
         }
-        const ok = callback();
-        root.statusText = ok ? label + " succeeded." : label + " failed: " + nocaiDirectPrint.lastError;
-        toast.show(root.statusText);
-        if (pollAfter)
-            Qt.callLater(function () {
-                    if (root.statusPollingEnabled)
-                        root.updateStatus(true);
-                });
-        return ok;
+        if (nocaiDirectPrint.maintenanceBusy) {
+            root.statusText = "Another printer maintenance operation is still running.";
+            toast.show(root.statusText);
+            return false;
+        }
+        root.pendingMaintenanceLabel = label;
+        root.pendingMaintenancePollAfter = pollAfter;
+        root.pendingMaintenanceShowOverlay = showOverlay === undefined
+            ? true : Boolean(showOverlay);
+        root.pendingMaintenanceShowToast = showToast === undefined
+            ? true : Boolean(showToast);
+        root.pendingMaintenanceCompletion = completion;
+        if (!nocaiDirectPrint.startMaintenanceAction(action, arguments || ({}))) {
+            root.statusText = label + " could not start: " + nocaiDirectPrint.lastError;
+            root.pendingMaintenanceLabel = "";
+            root.pendingMaintenancePollAfter = false;
+            root.pendingMaintenanceShowOverlay = false;
+            root.pendingMaintenanceShowToast = true;
+            root.pendingMaintenanceCompletion = null;
+            toast.show(root.statusText);
+            return false;
+        }
+        root.statusText = label + " is running…";
+        return true;
+    }
+
+    function movePrinterAxis(axis, direction, label) {
+        root.activeMotionAxis = axis;
+        return root.runAsyncAction(
+            label, "MoveAxis", {"axis": axis, "direction": direction},
+            false, null);
+    }
+
+    function stopPrinterAxis(axis, label) {
+        root.activeMotionAxis = axis;
+        return root.runAsyncAction(
+            label, "StopAxis", {"axis": axis}, true,
+            function (result, ok) {
+                if (ok)
+                    root.statusText = label + " at " + result.position + " mm.";
+            });
+    }
+
+    function savePrinterAxis(axis, label) {
+        root.activeMotionAxis = axis;
+        return root.runAsyncAction(
+            label, "SaveAxisPos", {"axis": axis}, true,
+            function (result, ok) {
+                if (ok)
+                    root.statusText = label + ": " + result.position + " mm.";
+            });
+    }
+
+    function maintenanceProgressText() {
+        switch (root.pendingMaintenanceLabel) {
+        case "Refresh Printer Status": return "Refreshing Printer Status…";
+        case "ConnectPrinter": return "Connecting to Printer…";
+        case "PrintNozzleCheck": return "Printing Nozzle Check…";
+        case "StartCleanOperation": return "Cleaning Print Heads…";
+        case "WipePrintHead": return "Wiping Print Heads…";
+        case "StartPump": return "Starting Pump…";
+        case "StopPumpOperation": return "Stopping Pump…";
+        case "StartFlashSpray": return "Starting Flash Spray…";
+        case "StopFlashSpray": return "Stopping Flash Spray…";
+        case "CapPrintHead": return "Capping Print Head…";
+        case "SetPrintHeight": return "Moving to Print Height…";
+        case "GetPrintHeight": return "Reading Print Height…";
+        }
+        return root.pendingMaintenanceLabel.length > 0
+            ? root.pendingMaintenanceLabel + "…"
+            : "Working with Printer…";
     }
 
     function refreshJobSettings() {
-        const result = nocaiDirectPrint.getJobSettings();
-        jobSettings = result;
-        runAction("GetJobSettings", function () {
-                return result.ok;
-            }, false);
+        runAsyncAction("GetJobSettings", "GetJobSettings", {}, false,
+            function (result, ok) {
+                if (ok)
+                    root.jobSettings = result;
+            });
     }
 
     function refreshAlignment() {
-        const result = nocaiDirectPrint.getAlignmentValues();
-        alignmentValues = result;
-        runAction("GetAlignmentValues", function () {
-                return result.ok;
-            }, false);
+        runAsyncAction("GetAlignmentValues", "GetAlignmentValues", {}, false,
+            function (result, ok) {
+                if (ok)
+                    root.alignmentValues = result;
+            });
     }
 
     function refreshUv() {
-        const result = nocaiDirectPrint.getUVParamValues();
-        uvValues = result;
-        runAction("GetUVParamValues", function () {
-                return result.ok;
-            }, false);
+        runAsyncAction("GetUVParamValues", "GetUVParamValues", {}, false,
+            function (result, ok) {
+                if (ok)
+                    root.uvValues = result;
+            });
     }
 
     function refreshNewUv() {
-        const result = nocaiDirectPrint.getNewUVParamValues();
-        newUvValues = result;
-        runAction("GetNewUVParamValues", function () {
-                return result.ok;
-            }, false);
+        runAsyncAction("GetNewUVParamValues", "GetNewUVParamValues", {}, false,
+            function (result, ok) {
+                if (ok)
+                    root.newUvValues = result;
+            });
+    }
+
+    Connections {
+        target: nocaiDirectPrint
+        function onMaintenanceActionFinished(action, succeeded, result, errorMessage) {
+            const label = root.pendingMaintenanceLabel.length > 0
+                ? root.pendingMaintenanceLabel : action;
+            root.statusText = succeeded
+                ? label + " succeeded."
+                : label + " failed: " + errorMessage;
+            const completion = root.pendingMaintenanceCompletion;
+            const pollAfter = root.pendingMaintenancePollAfter;
+            const showToast = root.pendingMaintenanceShowToast;
+            root.pendingMaintenanceLabel = "";
+            root.pendingMaintenancePollAfter = false;
+            root.pendingMaintenanceShowOverlay = false;
+            root.pendingMaintenanceShowToast = true;
+            root.pendingMaintenanceCompletion = null;
+            if (completion)
+                completion(result, succeeded);
+            if (showToast)
+                toast.show(root.statusText);
+            if (pollAfter)
+                Qt.callLater(function () {
+                        if (root.statusPollingEnabled && !nocaiDirectPrint.maintenanceBusy)
+                            root.updateStatus(true);
+                    });
+        }
     }
 
     Timer {
@@ -234,6 +332,11 @@ Page {
         repeat: true
         running: root.visible && root.controlsEnabled && root.statusPollingEnabled
         onTriggered: root.updateStatus(true)
+    }
+
+    Component.onCompleted: {
+        root.statusPollingEnabled = true;
+        Qt.callLater(function () { root.updateStatus(true); });
     }
 
     header: Rectangle {
@@ -267,20 +370,15 @@ Page {
             ThemedButton {
                 text: "Connect"
                 theme: root.theme
-                enabled: root.maintenanceSupported
                 Layout.preferredWidth: root.theme.headerButtonWidth(root.width)
                 Layout.preferredHeight: 40
-                onClicked: root.runAction("ConnectPrinter", function () {
-                        if (!nocaiDirectPrint.refreshPrinters())
-                            return false;
-                        if (root.appState.sdkSelectedPrinterIndex >= 0)
-                            nocaiDirectPrint.choosePrinter(root.appState.sdkSelectedPrinterIndex);
-                        const ok = nocaiDirectPrint.connectPrinter();
+                enabled: root.maintenanceSupported && !nocaiDirectPrint.maintenanceBusy
+                onClicked: root.runAsyncAction(
+                    "ConnectPrinter", "ConnectPrinter",
+                    {"printerIndex": root.appState.sdkSelectedPrinterIndex}, true,
+                    function (result, ok) {
                         root.statusPollingEnabled = ok;
-                        if (ok)
-                            Qt.callLater(root.updateStatus, true);
-                        return ok;
-                    }, false)
+                    })
             }
         }
     }
@@ -351,7 +449,7 @@ Page {
                         theme: root.theme
                     }
                     SpinBox {
-                        id: maintenancePrintHeightSpin
+                        id: maintenanceHeadMaskSpin
                         Layout.fillWidth: true
                         from: 0
                         to: 65535
@@ -364,58 +462,54 @@ Page {
                     ActionButton {
                         text: "Print Nozzle Check"
                         theme: root.theme
-                        onClicked: root.runAction("PrintNozzleCheck", function () {
-                                return nocaiDirectPrint.printNozzleCheck();
-                            }, true)
+                        onClicked: root.runAsyncAction(
+                            "PrintNozzleCheck", "PrintNozzleCheck", {}, true, null)
                     }
                     ActionButton {
                         text: "Automatic Head Cleaning"
                         theme: root.theme
-                        onClicked: root.runAction("StartCleanOperation", function () {
-                                return nocaiDirectPrint.startCleanOperation(root.headMask);
-                            }, true)
+                        onClicked: root.runAsyncAction(
+                            "StartCleanOperation", "StartCleanOperation",
+                            {"headMask": root.headMask}, true, null)
                     }
                     ActionButton {
                         text: "Wipe Heads"
                         theme: root.theme
-                        onClicked: root.runAction("WipePrintHead", function () {
-                                return nocaiDirectPrint.wipePrintHead(root.headMask);
-                            }, true)
-                    }
-                    ActionButton {
-                        text: "Start Pump"
-                        theme: root.theme
-                        onClicked: root.runAction("StartPump", function () {
-                                return nocaiDirectPrint.startPump(root.headMask);
-                            }, true)
-                    }
-                    ActionButton {
-                        text: "Stop Pump"
-                        theme: root.theme
-                        onClicked: root.runAction("StopPumpOperation", function () {
-                                return nocaiDirectPrint.stopPumpOperation();
-                            }, true)
-                    }
-                    ActionButton {
-                        text: "Start Flash Spray"
-                        theme: root.theme
-                        onClicked: root.runAction("StartFlashSpray", function () {
-                                return nocaiDirectPrint.spitPrintHead(root.headMask);
-                            }, true)
-                    }
-                    ActionButton {
-                        text: "Stop Flash Spray"
-                        theme: root.theme
-                        onClicked: root.runAction("StopFlashSpray", function () {
-                                return nocaiDirectPrint.stopSpitOperation();
-                            }, true)
+                        onClicked: root.runAsyncAction(
+                            "WipePrintHead", "WipePrintHead",
+                            {"headMask": root.headMask}, true, null)
                     }
                     ActionButton {
                         text: "Cap Head"
                         theme: root.theme
-                        onClicked: root.runAction("CapPrintHead", function () {
-                                return nocaiDirectPrint.capPrintHead();
-                            }, true)
+                        onClicked: root.runAsyncAction(
+                            "CapPrintHead", "CapPrintHead", {}, true, null)
+                    }
+                    ActionButton {
+                        text: "Start Pump"
+                        theme: root.theme
+                        onClicked: root.runAsyncAction(
+                            "StartPump", "StartPump",
+                            {"headMask": root.headMask}, true, null)
+                    }
+                    ActionButton {
+                        text: "Stop Pump"
+                        theme: root.theme
+                        onClicked: root.runAsyncAction(
+                            "StopPumpOperation", "StopPumpOperation", {}, true, null)
+                    }
+                    ActionButton {
+                        text: "Start Flash Spray"
+                        theme: root.theme
+                        onClicked: root.runAsyncAction(
+                            "StartFlashSpray", "StartFlashSpray",
+                            {"headMask": root.headMask}, true, null)
+                    }
+                    ActionButton {
+                        text: "Stop Flash Spray"
+                        theme: root.theme
+                        onClicked: root.runAsyncAction(
+                            "StopFlashSpray", "StopFlashSpray", {}, true, null)
                     }
                 }
             }
@@ -424,7 +518,89 @@ Page {
                 title: "Motion And Height"
                 theme: root.theme
                 sectionEnabled: root.controlsEnabled
-                help: "Axis 0 is X, 1 is Y, and 2 is Z. Direction 0 moves positive; direction 1 moves negative. The SDK reports saved/stop positions in millimeters where supported."
+                help: "Use the arrows to move the print head left or right and the bed forward or back. Motion continues until Stop is pressed or the printer reaches its limit. Print height is in millimeters and accepts two decimal places."
+
+                Label {
+                    text: "Head and Bed Motion"
+                    color: root.theme.text
+                    font.weight: Font.Medium
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                }
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: 3
+                    columnSpacing: 10
+                    rowSpacing: 10
+
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                    }
+                    ActionButton {
+                        text: "↑ Forward"
+                        Accessible.name: "Move bed forward"
+                        onClicked: root.movePrinterAxis(1, 0, "Move Bed Forward")
+                    }
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                    }
+
+                    ActionButton {
+                        text: "← Head"
+                        Accessible.name: "Move print head left"
+                        onClicked: root.movePrinterAxis(0, 0, "Move Head Left")
+                    }
+                    ActionButton {
+                        text: "■ Stop"
+                        Accessible.name: "Stop head or bed motion"
+                        onClicked: root.stopPrinterAxis(
+                            root.activeMotionAxis,
+                            root.activeMotionAxis === 0
+                                ? "Stop Head Motion"
+                                : (root.activeMotionAxis === 1
+                                   ? "Stop Bed Motion"
+                                   : "Stop Height Motion"))
+                    }
+                    ActionButton {
+                        text: "Head →"
+                        Accessible.name: "Move print head right"
+                        onClicked: root.movePrinterAxis(0, 1, "Move Head Right")
+                    }
+
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                    }
+                    ActionButton {
+                        text: "↓ Back"
+                        Accessible.name: "Move bed back toward the user"
+                        onClicked: root.movePrinterAxis(1, 1, "Move Bed Back")
+                    }
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                    }
+                }
+
+                ActionGrid {
+                    ActionButton {
+                        text: "Save Head Position"
+                        onClicked: root.savePrinterAxis(0, "Saved Head Position")
+                    }
+                    ActionButton {
+                        text: "Save Bed Position"
+                        onClicked: root.savePrinterAxis(1, "Saved Bed Position")
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 1
+                    color: root.theme.divider
+                }
 
                 GridLayout {
                     Layout.fillWidth: true
@@ -433,48 +609,27 @@ Page {
                     rowSpacing: 8
 
                     FieldLabel {
-                        text: "Axis"
-                        theme: root.theme
-                    }
-                    SpinBox {
-                        Layout.fillWidth: true
-                        from: 0
-                        to: 2
-                        value: root.axis
-                        onValueModified: root.axis = value
-                    }
-                    FieldLabel {
-                        text: "Direction"
-                        theme: root.theme
-                    }
-                    SpinBox {
-                        Layout.fillWidth: true
-                        from: 0
-                        to: 1
-                        value: root.axisDirection
-                        onValueModified: root.axisDirection = value
-                    }
-                    FieldLabel {
                         text: "Print Height mm"
                         theme: root.theme
                     }
                     SpinBox {
+                        id: maintenancePrintHeightSpin
                         Layout.fillWidth: true
                         from: 0
-                        to: 1520
+                        to: 15200
                         stepSize: 1
                         editable: true
-                        value: Math.round(root.printHeight * 10)
+                        value: Math.round(root.printHeight * 100)
                         textFromValue: function(value, locale) {
-                            return Number(value / 10.0).toLocaleString(locale, 'f', 1)
+                            return Number(value / 100.0).toLocaleString(locale, 'f', 2)
                         }
                         valueFromText: function(text, locale) {
-                            return Math.round(Number.fromLocaleString(locale, text) * 10.0)
+                            return Math.round(Number.fromLocaleString(locale, text) * 100.0)
                         }
                         validator: DoubleValidator {
                             bottom: 0.0
                             top: 152.0
-                            decimals: 1
+                            decimals: 2
                             notation: DoubleValidator.StandardNotation
                         }
                         contentItem: TextInput {
@@ -489,55 +644,40 @@ Page {
                             validator: maintenancePrintHeightSpin.validator
                             inputMethodHints: Qt.ImhFormattedNumbersOnly
                         }
-                        onValueModified: root.printHeight = value / 10.0
+                        onValueModified: root.printHeight = value / 100.0
                     }
                 }
 
                 ActionGrid {
                     ActionButton {
-                        text: "Move Axis"
-                        theme: root.theme
-                        onClicked: root.runAction("MoveAxis", function () {
-                                return nocaiDirectPrint.moveAxis(root.axis, root.axisDirection);
-                            }, true)
-                    }
-                    ActionButton {
-                        text: "Stop Axis"
-                        theme: root.theme
-                        onClicked: root.runAction("StopAxis", function () {
-                                const r = nocaiDirectPrint.stopAxis(root.axis);
-                                if (r.ok)
-                                    root.statusText = "StopAxis position: " + r.position + " mm";
-                                return r.ok;
-                            }, true)
-                    }
-                    ActionButton {
-                        text: "Save Axis Position"
-                        theme: root.theme
-                        onClicked: root.runAction("SaveAxisPos", function () {
-                                const r = nocaiDirectPrint.saveAxisPos(root.axis);
-                                if (r.ok)
-                                    root.statusText = "Saved position: " + r.position + " mm";
-                                return r.ok;
-                            }, true)
-                    }
-                    ActionButton {
                         text: "Set Height"
                         theme: root.theme
-                        onClicked: root.runAction("SetPrintHeight", function () {
-                                return nocaiDirectPrint.setPrintHeight(root.printHeight);
-                            }, true)
+                        onClicked: {
+                            root.activeMotionAxis = 2;
+                            root.runAsyncAction(
+                                "SetPrintHeight", "SetPrintHeight",
+                                {"heightMm": root.printHeight}, true, null);
+                        }
                     }
                     ActionButton {
                         text: "Get Height"
                         theme: root.theme
-                        onClicked: root.runAction("GetPrintHeight", function () {
-                                const r = nocaiDirectPrint.getPrintHeight();
-                                root.printHeight = r.heightMm;
-                                if (r.ok)
-                                    root.statusText = "Print height: " + r.heightMm + " mm";
-                                return r.ok;
-                            }, false)
+                        onClicked: root.runAsyncAction(
+                            "GetPrintHeight", "GetPrintHeight", {}, false,
+                            function (result, ok) {
+                                if (ok) {
+                                    root.printHeight = result.heightMm;
+                                    root.statusText = "Print height: " + result.heightMm + " mm";
+                                }
+                            })
+                    }
+                    ActionButton {
+                        text: "Stop Height"
+                        onClicked: root.stopPrinterAxis(2, "Stop Height Motion")
+                    }
+                    ActionButton {
+                        text: "Save Height Position"
+                        onClicked: root.savePrinterAxis(2, "Saved Height Position")
                     }
                 }
             }
@@ -557,9 +697,9 @@ Page {
                     ActionButton {
                         text: "Apply Read Settings"
                         theme: root.theme
-                        onClicked: root.runAction("SetJobSettings", function () {
-                                return nocaiDirectPrint.setJobSettingsFromMap(root.jobSettings);
-                            }, true)
+                        onClicked: root.runAsyncAction(
+                            "SetJobSettings", "SetJobSettings",
+                            {"settings": root.jobSettings}, true, null)
                     }
                 }
 
@@ -629,18 +769,19 @@ Page {
                     ActionButton {
                         text: "Apply Alignment"
                         theme: root.theme
-                        onClicked: root.runAction("SetAlignmentValues", function () {
-                                return nocaiDirectPrint.setAlignmentValues(root.alignmentValues, root.alignmentType);
-                            }, true)
+                        onClicked: root.runAsyncAction(
+                            "SetAlignmentValues", "SetAlignmentValues",
+                            {"settings": root.alignmentValues, "type": root.alignmentType},
+                            true, null)
                     }
                 }
 
                 ActionButton {
                     text: "Print Alignment Pattern"
                     theme: root.theme
-                    onClicked: root.runAction("PrintAlignmentPattern", function () {
-                            return nocaiDirectPrint.printAlignmentPattern(root.alignmentPatternType);
-                        }, true)
+                    onClicked: root.runAsyncAction(
+                        "PrintAlignmentPattern", "PrintAlignmentPattern",
+                        {"type": root.alignmentPatternType}, true, null)
                 }
 
                 Label {
@@ -724,21 +865,22 @@ Page {
                     ActionButton {
                         text: "Set XY"
                         theme: root.theme
-                        onClicked: root.runAction("SetPrintXYValue", function () {
-                                return nocaiDirectPrint.setPrintXYValue(root.printX, root.printY);
-                            }, true)
+                        onClicked: root.runAsyncAction(
+                            "SetPrintXYValue", "SetPrintXYValue",
+                            {"xMm": root.printX, "yMm": root.printY}, true, null)
                     }
                     ActionButton {
                         text: "Get XY"
                         theme: root.theme
-                        onClicked: root.runAction("GetPrintXYValue", function () {
-                                const r = nocaiDirectPrint.getPrintXYValue();
-                                root.printX = r.xMm;
-                                root.printY = r.yMm;
-                                if (r.ok)
-                                    root.statusText = "XY: " + r.xMm + ", " + r.yMm + " mm";
-                                return r.ok;
-                            }, false)
+                        onClicked: root.runAsyncAction(
+                            "GetPrintXYValue", "GetPrintXYValue", {}, false,
+                            function (result, ok) {
+                                if (ok) {
+                                    root.printX = result.xMm;
+                                    root.printY = result.yMm;
+                                    root.statusText = "XY: " + result.xMm + ", " + result.yMm + " mm";
+                                }
+                            })
                     }
                     ActionButton {
                         text: "Read UV"
@@ -748,25 +890,26 @@ Page {
                     ActionButton {
                         text: "Apply UV"
                         theme: root.theme
-                        onClicked: root.runAction("SetUVParamValues", function () {
-                                return nocaiDirectPrint.setUVParamValues(root.uvValues, root.uvType);
-                            }, true)
+                        onClicked: root.runAsyncAction(
+                            "SetUVParamValues", "SetUVParamValues",
+                            {"settings": root.uvValues, "type": root.uvType}, true, null)
                     }
                     ActionButton {
                         text: "New UV Support"
                         theme: root.theme
-                        onClicked: root.runAction("GetSupportNewUVParamFunction", function () {
-                                const support = nocaiDirectPrint.getSupportNewUVParamFunction();
-                                root.statusText = "New UV support: " + support;
-                                return support >= 0;
-                            }, false)
+                        onClicked: root.runAsyncAction(
+                            "GetSupportNewUVParamFunction", "GetSupportNewUVParamFunction",
+                            {}, false, function (result, ok) {
+                                if (ok)
+                                    root.statusText = "New UV support: " + result;
+                            })
                     }
                     ActionButton {
                         text: "Run New UV Function"
                         theme: root.theme
-                        onClicked: root.runAction("SetNewUVParamFunction", function () {
-                                return nocaiDirectPrint.setNewUVParamFunction(root.newUvFunctionType);
-                            }, true)
+                        onClicked: root.runAsyncAction(
+                            "SetNewUVParamFunction", "SetNewUVParamFunction",
+                            {"type": root.newUvFunctionType}, true, null)
                     }
                     ActionButton {
                         text: "Read New UV"
@@ -776,9 +919,10 @@ Page {
                     ActionButton {
                         text: "Apply New UV"
                         theme: root.theme
-                        onClicked: root.runAction("SetNewUVParamValues", function () {
-                                return nocaiDirectPrint.setNewUVParamValues(root.newUvValues, root.newUvType);
-                            }, true)
+                        onClicked: root.runAsyncAction(
+                            "SetNewUVParamValues", "SetNewUVParamValues",
+                            {"settings": root.newUvValues, "type": root.newUvType},
+                            true, null)
                     }
                 }
             }
@@ -789,15 +933,66 @@ Page {
         }
     }
 
+    Item {
+        id: maintenanceBusyOverlay
+        parent: Overlay.overlay
+        anchors.fill: parent
+        visible: root.visible
+                 && nocaiDirectPrint.maintenanceBusy
+                 && root.pendingMaintenanceShowOverlay
+        z: 1000
+
+        Rectangle {
+            anchors.fill: parent
+            color: "#00000088"
+        }
+
+        MouseArea {
+            anchors.fill: parent
+        }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: Math.min(360, parent.width - 40)
+            height: 150
+            radius: 10
+            color: root.theme.surface
+            border.width: 1
+            border.color: root.theme.divider
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 20
+                spacing: 12
+
+                BusyIndicator {
+                    running: maintenanceBusyOverlay.visible
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.preferredWidth: 56
+                    Layout.preferredHeight: 56
+                }
+
+                Label {
+                    text: root.maintenanceProgressText()
+                    color: root.theme.text
+                    font.pixelSize: 17
+                    font.weight: Font.Medium
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+            }
+        }
+    }
+
     P.FileDialog {
         id: exportConfigDialog
         title: "Export Nocai Config"
         fileMode: P.FileDialog.SaveFile
         defaultSuffix: "pfg"
         nameFilters: ["Printer Config (*.pfg)", "All Files (*)"]
-        onAccepted: root.runAction("ExportConfigFile", function () {
-                return nocaiDirectPrint.exportConfigFile(file);
-            }, true)
+        onAccepted: root.runAsyncAction(
+            "ExportConfigFile", "ExportConfigFile", {"path": file}, true, null)
     }
 
     P.FileDialog {
@@ -805,9 +1000,8 @@ Page {
         title: "Import Nocai Config"
         fileMode: P.FileDialog.OpenFile
         nameFilters: ["Printer Config (*.pfg)", "All Files (*)"]
-        onAccepted: root.runAction("ImportConfigFile", function () {
-                return nocaiDirectPrint.importConfigFile(file);
-            }, true)
+        onAccepted: root.runAsyncAction(
+            "ImportConfigFile", "ImportConfigFile", {"path": file}, true, null)
     }
 
     Toast {

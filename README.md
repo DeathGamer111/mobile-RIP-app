@@ -59,6 +59,7 @@ The multi-ink backend currently supports:
 |-- src/core/                      Shared models, settings, assets, strings, themes, and capabilities
 |-- src/platform/android/          Android-safe platform facades for APK boot
 |-- src/platform/desktop/          Linux desktop integrations such as CUPS
+|-- src/printerservice/            Persistent service, versioned IPC, and public client API
 |-- src/rip/                       Native RIP, color, screening, and PRN pipeline
 |-- src/third_party/stb/           Third-party single-header image loader
 `-- src/vendor/nocai/              Isolated direct-print vendor adapter
@@ -72,7 +73,7 @@ Run the local Linux test suite with:
 scripts/run_tests.sh
 ```
 
-The script configures `build-tests`, builds the app and test executables, then runs `ctest --output-on-failure`. Tests cover the job model, asset/platform helpers, string resources, theme loading, RIP pipeline behavior, Android-safe stubs, and vendor isolation. They do not require `DIRECT_PRINT_SDK_ROOT`, blue-noise mask fixtures, or an Android device.
+The script configures `build-tests`, builds the app and test executables, then runs `ctest --output-on-failure`. Tests cover the job model, asset/platform helpers, string resources, theme loading, RIP pipeline behavior, Android-safe stubs, vendor isolation, SDK architecture normalization, archive selection, and ELF validation. Ordinary test builds do not require `DIRECT_PRINT_SDK_ROOT`, blue-noise mask fixtures, or an Android device.
 
 Important QML views include:
 
@@ -117,7 +118,7 @@ cmake -S . -B build -DDIRECT_PRINT_SDK_ARCHIVE=/path/to/vendor-sdk.zip
 
 The settings may also be exported as environment variables. When neither is set, Linux builds auto-detect one matching local `DemoForX64Linux*.zip` or `DemoForARM64Linux*.tar*` archive. Archives are extracted only under the build directory.
 
-For Linux, CMake validates the ELF machine type and stages `libSYPrintAPIforPROII.so` beside `PrintFlow`, preserving the required `PrinterSocketDLL/linux/<architecture>/PrinterSocket.so` subtree. Set `-DDIRECT_PRINT_SDK_STRICT=ON` to make a missing or mismatched SDK a configuration error.
+For Linux, CMake validates the ELF machine type and stages `libSYPrintAPIforPROII.so` beside `PrintFlowPrinterService`, preserving the required `PrinterSocketDLL/linux/<architecture>/PrinterSocket.so` subtree. The desktop GUI does not load the proprietary library. Set `-DDIRECT_PRINT_SDK_STRICT=ON` to make missing, ambiguous, incomplete, or architecture-mismatched SDK inputs a configuration error. The development and package workflows always enable strict mode; ordinary CMake and test builds may omit the proprietary SDK.
 
 The July 2026 x86-64 SDK exports internal `API_*` C++ symbols instead of most documented C names. The adapter prefers the documented interface and falls back to the known x86-64 aliases, allowing this package to load while remaining compatible with a corrected vendor build.
 
@@ -128,7 +129,7 @@ The development script installs/checks the main Linux dependencies:
 - CMake and a C++ compiler
 - Qt 6 Quick, Widgets, Quick Controls 2, QML tooling, and related QML modules
 - CUPS development libraries
-- ImageMagick Magick++
+- ImageMagick 6 or 7 Magick++ (the scripts select the available development package)
 - Little CMS 2
 - AppImage/package helper tooling used by the local workflow
 
@@ -146,15 +147,48 @@ The root script delegates to `scripts/dev_build_linux.sh`. It uses `sudo apt-get
 
 For direct-attached Nocai printers, the Linux development build also:
 
-- grants the final `PrintFlow` executable `CAP_NET_RAW`, which the vendor SDK
-  needs for raw-socket printer discovery; and
+- grants `PrintFlowPrinterService` `CAP_NET_RAW`, which the vendor SDK needs
+  for raw-socket printer discovery and which the ARM service uses to retain the
+  selected interface's process-scoped promiscuous receive membership; and
 - configures a wired interface with carrier but no existing IPv4 address for
   IPv4 link-local networking (`169.254.0.0/16`).
 
 Set `PRINTFLOW_PRINTER_INTERFACE=enp1s0` (or another interface name) to select
 an interface explicitly. Set `PRINTFLOW_CONFIGURE_PRINTER_NETWORK=0` to leave
 network configuration untouched. The capability is intentionally applied after
-the build because relinking the executable removes file capabilities.
+the build because relinking the service executable removes file capabilities.
+
+## Persistent printer service and public API
+
+Linux printing is owned by one per-user `PrintFlowPrinterService` process. The
+GUI starts it on demand over a user-only local socket, and the service remains
+alive when the GUI closes. Setup, status, maintenance, nozzle checks, and raster
+submission are serialized through the same SDK instance. This prevents a GUI
+restart or a second API consumer from abandoning the controller session and
+then competing for the ARM raw socket.
+
+`PrintFlowPrinterApi` is the public Qt/C++ client library shared by ARM64 and
+x86-64 builds. Its protocol is explicitly versioned, validates framed messages,
+and transports canonical direct-print settings and raster data without exposing
+vendor structs. CMake installs the headers and a `PrintFlow::PrinterApi` target.
+See `src/printerservice/README.md` for the client example and protocol contract.
+
+Service output, including redirected vendor stdout/stderr, is retained in
+`~/.local/share/PrintFlow/logs/printer-service.log` (with one rotated copy).
+For controlled upgrades, the executable supports `--ping` and `--shutdown`
+without loading a second SDK owner.
+
+## Linux AppImage package
+
+Build a native, architecture-specific package with the same theme and SDK overrides as the development build:
+
+```bash
+./Dev_Build_App.sh --linux-package
+RIP_THEME=nocai ./Dev_Build_App.sh --linux-package
+DIRECT_PRINT_SDK_ARCHIVE=/path/to/vendor-sdk.tar ./Dev_Build_App.sh --linux-package
+```
+
+The workflow selects `x86_64` or `aarch64` from the host architecture, requires the matching direct-print SDK, and packages only that API and printer-socket library. It uses the official `linuxdeploy` Qt and AppImage plugins cached under ignored `.tools/`, validates the GUI, service, public API, and SDK ELF architectures, and writes `output/PrintFlow-<version>-<arch>.AppImage`. It also produces a native Debian package containing the GUI, persistent service, public API development package, and matching SDK. Its install hook grants only the service `CAP_NET_RAW`; this is the recommended customer deployment because capabilities inside a FUSE-mounted AppImage are not reliable. Packages are native per architecture rather than universal.
 
 ## Standard Build
 

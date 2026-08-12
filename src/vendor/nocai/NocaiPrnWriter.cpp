@@ -176,11 +176,35 @@ NocaiPrnWriter::StandardX33Header NocaiPrnWriter::makeStandardX33Header(
         static_cast<uint32_t>(height),
         static_cast<uint32_t>(width),
         0, // PaperWidth
-        static_cast<uint32_t>(colors), // Colors: YMCK or YMCKWW
-        1, // Bits: vendor enum value for two bits per dot
-        1, // Pass: required by the proven X-33 PRN format
-        0, // VsdMode
-        0  // Reserved
+        // Packed disk word: uint16 Colors followed by uint16 Bits. Bits=0 is
+        // the value in the physically proven two-bits-per-dot X-33 PRN.
+        static_cast<uint32_t>(colors),
+        1, // packed Pass
+        1, // packed VsdMode
+        0, // packed Reserved[0]
+        0  // packed Reserved[1]
+    };
+}
+
+NocaiPrnWriter::StandardX33Header NocaiPrnWriter::makeStandardX33SdkHeader(
+    const StandardX33Header& packedHeader)
+{
+    // The vendor demo reads a packed file header containing two WORD fields,
+    // then assigns them member-by-member to the all-DWORD StartPrint struct.
+    // A raw 48-byte memcpy shifts Bits, Pass, and VsdMode by one member.
+    return {
+        packedHeader[0],
+        packedHeader[1],
+        packedHeader[2],
+        packedHeader[3],
+        packedHeader[4],
+        packedHeader[5],
+        packedHeader[6],
+        packedHeader[7] & 0xffffu,
+        packedHeader[7] >> 16,
+        packedHeader[8],
+        packedHeader[9],
+        packedHeader[10]
     };
 }
 

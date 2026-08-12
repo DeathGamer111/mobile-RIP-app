@@ -48,6 +48,7 @@ class PrintJobCMYK : public QObject {
 
 signals:
     void prnGenerationFinished(bool success);	// Emitted when runPRNGeneration completes.
+    void outputPhaseChanged(const QString& phase);
 
 public slots:
     Q_INVOKABLE void runPRNGeneration(const QVariantMap& jobMap, const QString& outputPath);		// End-to-end async entry.

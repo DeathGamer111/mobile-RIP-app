@@ -56,11 +56,12 @@ bool isInstalledFor(const void* owner)
 
 } // namespace NocaiDirectPrintCompatibility
 
-#if defined(__linux__) && defined(__x86_64__) && !defined(__ANDROID__)
+#if defined(__linux__) && \
+    (defined(__x86_64__) || defined(__aarch64__)) && !defined(__ANDROID__)
 
-// These names and signatures match the plain wrappers in the ARM SDK. They
-// must remain exported by the executable so the x86-64 vendor library can
-// resolve its lazy imports when it prints an alignment/nozzle pattern.
+// These names and signatures match the vendor's host callback ABI. They must
+// remain exported by the executable: the x86-64 library has lazy imports for
+// them, and the ARM library uses them for vendor-generated pattern jobs.
 extern "C" __attribute__((visibility("default"))) int StartPrint(void* property)
 {
     const auto fn = g_startPrint.load(std::memory_order_acquire);

@@ -26,8 +26,10 @@ public:
         int width,
         int height);
 
-    // Canonical 48-byte header used by the legacy X-33 PRN format. Keep file
-    // output and direct SDK submission sourced from this one definition.
+    // Canonical packed 48-byte header used by the legacy X-33 PRN format.
+    // Its Colors and Bits fields are adjacent uint16 values; it must be
+    // widened before passing it to API_StartPrint, whose ABI uses 12 uint32
+    // fields instead.
     static StandardCmykHeader makeStandardCmykHeader(
         int width,
         int height,
@@ -42,6 +44,9 @@ public:
         int ydpi,
         int bytesPerLine,
         int colors);
+
+    static StandardX33Header makeStandardX33SdkHeader(
+        const StandardX33Header& packedHeader);
 
     static bool writeStandardCmykPrn(
         const std::vector<std::vector<std::vector<uint8_t>>>& packedLines,

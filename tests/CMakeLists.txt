@@ -2,12 +2,41 @@ function(add_printflow_qt_test target test_name)
     add_executable(${target} ${ARGN})
     target_include_directories(${target} PRIVATE
         ${PROJECT_SOURCE_DIR}/src/core
+        ${PROJECT_SOURCE_DIR}/src/printerservice
         ${PROJECT_SOURCE_DIR}/src/rip
         ${PROJECT_SOURCE_DIR}/src/vendor/nocai
     )
     target_link_libraries(${target} PRIVATE Qt6::Core Qt6::Test)
     add_test(NAME ${test_name} COMMAND ${target})
 endfunction()
+
+add_test(NAME PrintFlow.Build.DirectPrintSdkHelpers
+    COMMAND "${CMAKE_COMMAND}"
+        -DPRINTFLOW_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/direct-print-sdk-helper-test
+        -DTEST_MODE=helpers
+        -DTEST_HOST_PROCESSOR=${CMAKE_HOST_SYSTEM_PROCESSOR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/DirectPrintSdkHelpersTest.cmake)
+
+add_test(NAME PrintFlow.Build.DirectPrintSdkStrictMissing
+    COMMAND "${CMAKE_COMMAND}"
+        -DPRINTFLOW_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/direct-print-sdk-strict-missing-test
+        -DTEST_MODE=strict-missing
+        -DTEST_HOST_PROCESSOR=${CMAKE_HOST_SYSTEM_PROCESSOR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/DirectPrintSdkHelpersTest.cmake)
+set_tests_properties(PrintFlow.Build.DirectPrintSdkStrictMissing PROPERTIES
+    WILL_FAIL TRUE)
+
+add_test(NAME PrintFlow.Build.DirectPrintSdkStrictAmbiguous
+    COMMAND "${CMAKE_COMMAND}"
+        -DPRINTFLOW_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/direct-print-sdk-strict-ambiguous-test
+        -DTEST_MODE=strict-ambiguous
+        -DTEST_HOST_PROCESSOR=${CMAKE_HOST_SYSTEM_PROCESSOR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/DirectPrintSdkHelpersTest.cmake)
+set_tests_properties(PrintFlow.Build.DirectPrintSdkStrictAmbiguous PROPERTIES
+    WILL_FAIL TRUE)
 
 set(RIP_TEST_ASSET_FILES ${RIP_ASSET_FILES})
 list(TRANSFORM RIP_TEST_ASSET_FILES PREPEND "${PROJECT_SOURCE_DIR}/")
@@ -106,15 +135,21 @@ add_printflow_qt_test(PrintFlowVendorIsolationTest PrintFlow.Vendor.DirectPrintU
     ${PROJECT_SOURCE_DIR}/src/core/IPrintOutputClient.h
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiDirectPrintClient.h
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiDirectPrintClient.cpp
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiArmCommandTagCompatibility.h
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiArmCommandTagCompatibility.cpp
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiArmStaleSessionRecovery.h
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiArmStaleSessionRecovery.cpp
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiDirectPrintCompatibility.h
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiDirectPrintCompatibility.cpp
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.h
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.cpp
 )
+target_link_libraries(PrintFlowVendorIsolationTest PRIVATE Qt6::Concurrent)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
-   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|aarch64|arm64|ARM64)$")
     set_target_properties(PrintFlowVendorIsolationTest PROPERTIES ENABLE_EXPORTS ON)
+    target_link_libraries(PrintFlowVendorIsolationTest PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
 add_library(PrintFlowFakeMangledDirectPrintSdk SHARED
@@ -128,8 +163,13 @@ add_dependencies(PrintFlowVendorIsolationTest PrintFlowFakeMangledDirectPrintSdk
 target_compile_definitions(PrintFlowVendorIsolationTest PRIVATE
     PRINTFLOW_FAKE_MANGLED_SDK_PATH="$<TARGET_FILE:PrintFlowFakeMangledDirectPrintSdk>"
 )
-get_property(PRINTFLOW_CONFIGURED_SDK_ROOT TARGET PrintFlow
-    PROPERTY PRINTFLOW_DIRECT_PRINT_SDK_ROOT)
+if(TARGET PrintFlowPrinterService)
+    get_property(PRINTFLOW_CONFIGURED_SDK_ROOT TARGET PrintFlowPrinterService
+        PROPERTY PRINTFLOW_DIRECT_PRINT_SDK_ROOT)
+else()
+    get_property(PRINTFLOW_CONFIGURED_SDK_ROOT TARGET PrintFlow
+        PROPERTY PRINTFLOW_DIRECT_PRINT_SDK_ROOT)
+endif()
 if(PRINTFLOW_CONFIGURED_SDK_ROOT)
     target_compile_definitions(PrintFlowVendorIsolationTest PRIVATE
         PRINTFLOW_CONFIGURED_SDK_ROOT="${PRINTFLOW_CONFIGURED_SDK_ROOT}"
@@ -141,6 +181,28 @@ add_printflow_qt_test(PrintFlowNocaiPrnWriterTest PrintFlow.Vendor.NocaiPrnWrite
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.h
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.cpp
 )
+
+add_printflow_qt_test(PrintFlowNocaiArmStaleSessionRecoveryTest
+    PrintFlow.Vendor.NocaiArmStaleSessionRecovery
+    NocaiArmStaleSessionRecoveryTest.cpp
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiArmStaleSessionRecovery.h
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiArmStaleSessionRecovery.cpp
+)
+
+add_printflow_qt_test(PrintFlowPrinterServiceProtocolTest
+    PrintFlow.PrinterService.Protocol
+    PrinterServiceProtocolTest.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/IPrintOutputClient.h
+    ${PROJECT_SOURCE_DIR}/src/printerservice/PrinterServiceProtocol.h
+    ${PROJECT_SOURCE_DIR}/src/printerservice/PrinterServiceProtocol.cpp
+)
+target_link_libraries(PrintFlowPrinterServiceProtocolTest PRIVATE Qt6::Network)
+
+add_executable(PrintFlowPrinterApiSurfaceTest PrinterApiSurfaceTest.cpp)
+target_link_libraries(PrintFlowPrinterApiSurfaceTest PRIVATE
+    PrintFlow::PrinterApi Qt6::Test)
+add_test(NAME PrintFlow.PrinterService.PublicApi
+         COMMAND PrintFlowPrinterApiSurfaceTest)
 
 add_printflow_qt_test(PrintFlowCMYKAssetManagerTest PrintFlow.Rip.CMYKAssetManager
     PrintJobCMYKAssetManagerTest.cpp

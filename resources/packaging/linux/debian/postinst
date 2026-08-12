@@ -1,0 +1,14 @@
+#!/bin/sh
+
+set -e
+
+service_path="/usr/bin/PrintFlowPrinterService"
+if [ ! -x "$service_path" ]; then
+    echo "PrintFlow printer service is missing: $service_path" >&2
+    exit 1
+fi
+
+setcap cap_net_raw+ep "$service_path"
+ldconfig
+
+exit 0

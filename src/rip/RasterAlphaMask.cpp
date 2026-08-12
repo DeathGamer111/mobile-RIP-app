@@ -1,4 +1,5 @@
 #include "RasterAlphaMask.h"
+#include "MagickCompatibility.h"
 
 #include <limits>
 #include <string>
@@ -34,7 +35,7 @@ bool RasterAlphaMask::capture(Magick::Image& source)
 
     // Images without an alpha channel bypass the mask completely. This keeps
     // their existing CMYK values byte-for-byte unchanged.
-    if (!source.matte())
+    if (!MagickCompatibility::hasAlphaChannel(source))
         return true;
 
     const int sourceWidth = static_cast<int>(source.columns());

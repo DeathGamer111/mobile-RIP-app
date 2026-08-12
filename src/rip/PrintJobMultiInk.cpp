@@ -271,6 +271,7 @@ int PrintJobMultiInk::inkMode() const
 void PrintJobMultiInk::runPRNGeneration(const QVariantMap& jobMap, const QString& outputPath)
 {
     (void)QtConcurrent::run([=]() {
+        emit outputPhaseChanged(QStringLiteral("rasterizing"));
         bool success = false;
         if (const_cast<PrintJobMultiInk*>(this)->prepareJobForOutput(jobMap, outputPath)) {
             RasterPayload payload;
@@ -280,8 +281,10 @@ void PrintJobMultiInk::runPRNGeneration(const QVariantMap& jobMap, const QString
                 resolution.height(),
                 payload);
 
-            if (success)
+            if (success) {
+                emit outputPhaseChanged(QStringLiteral("generatingPrn"));
                 success = const_cast<PrintJobMultiInk*>(this)->writePRNFile(payload, outputPath);
+            }
         }
 
         emit prnGenerationFinished(success);
@@ -292,6 +295,7 @@ void PrintJobMultiInk::runPRNGeneration(const QVariantMap& jobMap, const QString
 void PrintJobMultiInk::runDirectPrint(const QVariantMap& jobMap)
 {
     (void)QtConcurrent::run([=]() {
+        emit outputPhaseChanged(QStringLiteral("rasterizing"));
         bool success = false;
         if (const_cast<PrintJobMultiInk*>(this)->prepareJobForOutput(jobMap, QStringLiteral("(direct print)"))) {
             RasterPayload payload;
@@ -301,8 +305,10 @@ void PrintJobMultiInk::runDirectPrint(const QVariantMap& jobMap)
                 resolution.height(),
                 payload);
 
-            if (success)
+            if (success) {
+                emit outputPhaseChanged(QStringLiteral("printing"));
                 success = const_cast<PrintJobMultiInk*>(this)->sendDirectPrint(payload, jobMap);
+            }
         }
 
         emit prnGenerationFinished(success);

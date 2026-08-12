@@ -2,10 +2,12 @@ cmake_minimum_required(VERSION 3.16)
 
 project(PrintFlow VERSION 0.1 LANGUAGES CXX)
 
+include(GNUInstallDirs)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-enable_testing()
+include(CTest)
 
 option(RIP_ANDROID_ENABLE_RIP_PROCESSING "Build Android with the native RIP dependency stack instead of boot-safe stubs." OFF)
 option(RIP_EMBED_BLUE_NOISE_MASKS "Embed local blue-noise TIFF masks into the Qt resource bundle." OFF)
@@ -13,7 +15,7 @@ set(RIP_THEME "default" CACHE STRING "Built-in theme id to embed as the selected
 set(RIP_THEME_FILE "" CACHE FILEPATH "Optional custom theme JSON file to embed instead of a built-in selected theme.")
 set_property(CACHE RIP_THEME PROPERTY STRINGS default nocai xante)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Concurrent Widgets QuickControls2 Test Xml)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Concurrent Widgets QuickControls2 Test Xml Network)
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -30,15 +32,26 @@ set(RIP_CORE_SOURCES
     src/core/PrintJob.h
     src/core/PrintJobModel.h src/core/PrintJobModel.cpp
     src/core/ThemeManager.h src/core/ThemeManager.cpp
+    src/vendor/nocai/NocaiPrnWriter.h src/vendor/nocai/NocaiPrnWriter.cpp
+)
+
+set(PRINTFLOW_DIRECT_PRINT_BACKEND_SOURCES
     src/vendor/nocai/NocaiDirectPrintClient.h src/vendor/nocai/NocaiDirectPrintClient.cpp
+    src/vendor/nocai/NocaiArmCommandTagCompatibility.h src/vendor/nocai/NocaiArmCommandTagCompatibility.cpp
+    src/vendor/nocai/NocaiArmStaleSessionRecovery.h src/vendor/nocai/NocaiArmStaleSessionRecovery.cpp
     src/vendor/nocai/NocaiDirectPrintCompatibility.h src/vendor/nocai/NocaiDirectPrintCompatibility.cpp
     src/vendor/nocai/NocaiPrnWriter.h src/vendor/nocai/NocaiPrnWriter.cpp
 )
+
+if(ANDROID)
+    list(APPEND RIP_CORE_SOURCES ${PRINTFLOW_DIRECT_PRINT_BACKEND_SOURCES})
+endif()
 
 set(RIP_NATIVE_SOURCES
     src/rip/ColorProfile.h src/rip/ColorProfile.cpp
     src/rip/ImageEditor.h src/rip/ImageEditor.cpp
     src/rip/ImageLoader.h src/rip/ImageLoader.cpp
+    src/rip/MagickCompatibility.h
     src/rip/MultiInkLinearization.h src/rip/MultiInkLinearization.cpp
     src/rip/MultiInkScreenEngine.h src/rip/MultiInkScreenEngine.cpp
     src/rip/MultiInkToneBuilder.h src/rip/MultiInkToneBuilder.cpp
@@ -83,9 +96,34 @@ qt_add_executable(PrintFlow
     src/third_party/stb/stb_image.h
 )
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
-   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
-    set_target_properties(PrintFlow PROPERTIES ENABLE_EXPORTS ON)
+if(NOT ANDROID)
+    add_library(PrintFlowPrinterApi SHARED
+        src/printerservice/PrintFlowPrinterApiExport.h
+        src/printerservice/PrinterServiceProtocol.h
+        src/printerservice/PrinterServiceProtocol.cpp
+        src/printerservice/PrinterServiceClient.h
+        src/printerservice/PrinterServiceClient.cpp
+        src/core/IPrintOutputClient.h
+    )
+    add_library(PrintFlow::PrinterApi ALIAS PrintFlowPrinterApi)
+    set_target_properties(PrintFlowPrinterApi PROPERTIES
+        VERSION 1.0.0
+        SOVERSION 1
+        OUTPUT_NAME PrintFlowPrinterApi
+        EXPORT_NAME PrinterApi
+    )
+    target_compile_definitions(PrintFlowPrinterApi PRIVATE
+        PRINTFLOW_PRINTER_API_LIBRARY=1
+    )
+    target_include_directories(PrintFlowPrinterApi
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/printerservice>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/PrintFlowPrinterApi>
+    )
+    target_link_libraries(PrintFlowPrinterApi
+        PUBLIC Qt6::Core Qt6::Concurrent Qt6::Network
+    )
 endif()
 
 target_include_directories(PrintFlow PRIVATE
@@ -94,6 +132,7 @@ target_include_directories(PrintFlow PRIVATE
     src/core
     src/third_party/stb
     src/vendor/nocai
+    src/printerservice
 )
 
 if(ANDROID AND NOT RIP_ANDROID_ENABLE_RIP_PROCESSING)
@@ -118,7 +157,12 @@ target_link_libraries(PrintFlow
         Qt6::QuickControls2
         Qt6::Widgets
         Qt6::Xml
+        Qt6::Network
 )
+
+if(TARGET PrintFlowPrinterApi)
+    target_link_libraries(PrintFlow PRIVATE PrintFlow::PrinterApi)
+endif()
 
 if(NOT ANDROID)
     find_path(CUPS_INCLUDE_DIR cups/cups.h PATH_SUFFIXES cups)
@@ -130,6 +174,10 @@ if(NOT ANDROID)
         target_link_libraries(PrintFlow PRIVATE ${CUPS_LIBRARY})
     else()
         message(FATAL_ERROR "CUPS library not found")
+    endif()
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(PrintFlow PRIVATE ${CMAKE_DL_LIBS})
     endif()
 endif()
 
@@ -193,7 +241,34 @@ if(ANDROID)
 endif()
 
 include(cmake/DirectPrintSdk.cmake)
-printflow_configure_direct_print_sdk(PrintFlow)
+if(ANDROID)
+    printflow_configure_direct_print_sdk(PrintFlow)
+endif()
+
+if(NOT ANDROID)
+    set(PRINTFLOW_PRINTER_SERVICE_SOURCES
+        src/printerservice/main.cpp
+        src/printerservice/PrinterServiceServer.h src/printerservice/PrinterServiceServer.cpp
+        src/printerservice/PrinterServiceProtocol.h src/printerservice/PrinterServiceProtocol.cpp
+        src/core/IPrintOutputClient.h
+        ${PRINTFLOW_DIRECT_PRINT_BACKEND_SOURCES}
+    )
+    add_executable(PrintFlowPrinterService ${PRINTFLOW_PRINTER_SERVICE_SOURCES})
+    set_target_properties(PrintFlowPrinterService PROPERTIES ENABLE_EXPORTS ON)
+    target_include_directories(PrintFlowPrinterService PRIVATE
+        src/core
+        src/printerservice
+        src/vendor/nocai
+    )
+    target_link_libraries(PrintFlowPrinterService PRIVATE
+        Qt6::Core
+        Qt6::Concurrent
+        Qt6::Network
+        ${CMAKE_DL_LIBS}
+    )
+    printflow_configure_direct_print_sdk(PrintFlowPrinterService)
+    add_dependencies(PrintFlow PrintFlowPrinterService)
+endif()
 
 file(GLOB RIP_QML_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/qml/*.qml"
@@ -262,13 +337,89 @@ set_target_properties(PrintFlow PROPERTIES
     WIN32_EXECUTABLE TRUE
 )
 
-include(GNUInstallDirs)
-install(TARGETS PrintFlow
+set(PRINTFLOW_INSTALL_TARGETS PrintFlow)
+if(TARGET PrintFlowPrinterService)
+    list(APPEND PRINTFLOW_INSTALL_TARGETS PrintFlowPrinterService)
+endif()
+install(TARGETS ${PRINTFLOW_INSTALL_TARGETS}
     BUNDLE DESTINATION .
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
-if(NOT ANDROID)
+if(TARGET PrintFlowPrinterApi)
+    install(TARGETS PrintFlowPrinterApi
+        EXPORT PrintFlowPrinterApiTargets
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+    include(CMakePackageConfigHelpers)
+    configure_package_config_file(
+        cmake/PrintFlowPrinterApiConfig.cmake.in
+        "${CMAKE_CURRENT_BINARY_DIR}/PrintFlowPrinterApiConfig.cmake"
+        INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/PrintFlowPrinterApi"
+    )
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/PrintFlowPrinterApiConfigVersion.cmake"
+        VERSION 1.0.0
+        COMPATIBILITY SameMajorVersion
+    )
+    install(EXPORT PrintFlowPrinterApiTargets
+        FILE PrintFlowPrinterApiTargets.cmake
+        NAMESPACE PrintFlow::
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/PrintFlowPrinterApi"
+    )
+    install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/PrintFlowPrinterApiConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/PrintFlowPrinterApiConfigVersion.cmake"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/PrintFlowPrinterApi"
+    )
+    install(FILES
+        src/core/IPrintOutputClient.h
+        src/printerservice/PrintFlowPrinterApiExport.h
+        src/printerservice/PrinterServiceClient.h
+        src/printerservice/PrinterServiceProtocol.h
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/PrintFlowPrinterApi"
+    )
+endif()
+
+if(UNIX AND NOT ANDROID)
+    install(FILES resources/packaging/linux/printflow.desktop
+        DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/applications")
+    install(FILES resources/assets/logo.png
+        DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/256x256/apps"
+        RENAME PrintFlow.png)
+
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+        set(PRINTFLOW_PACKAGE_ARCH x86_64)
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+        set(PRINTFLOW_PACKAGE_ARCH aarch64)
+    else()
+        string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" PRINTFLOW_PACKAGE_ARCH)
+    endif()
+    set(CPACK_PACKAGE_NAME PrintFlow)
+    set(CPACK_PACKAGE_VENDOR "PrintFlow")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+        "PrintFlow RIP and persistent unified printer service")
+    set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+    set(CPACK_PACKAGE_FILE_NAME
+        "PrintFlow-${PROJECT_VERSION}-${PRINTFLOW_PACKAGE_ARCH}")
+    set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "PrintFlow")
+    set(CPACK_DEBIAN_PACKAGE_SECTION "graphics")
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "libcap2-bin, network-manager")
+    set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/packaging/linux/debian/preinst"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/packaging/linux/debian/postinst")
+    set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION TRUE)
+    include(CPack)
+endif()
+
+if(NOT ANDROID AND BUILD_TESTING)
     add_subdirectory(tests)
 endif()

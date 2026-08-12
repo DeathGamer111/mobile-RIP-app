@@ -56,11 +56,20 @@ static inline uint8_t lerp_u8(uint8_t a, uint8_t b, uint8_t w /*0..255*/) {
  */
 void PrintJobCMYK::runPRNGeneration(const QVariantMap& jobMap, const QString& outputPath) {
     (void) QtConcurrent::run([=]() {
+        emit outputPhaseChanged(QStringLiteral("rasterizing"));
         int xdpi = 0;
         int ydpi = 0;
-        const bool prepared = const_cast<PrintJobCMYK*>(this)->prepareJobForOutput(jobMap, xdpi, ydpi);
-        const bool success = prepared && const_cast<PrintJobCMYK*>(this)->generateFinalPRN(
-            outputPath, xdpi, ydpi);
+        bool success = const_cast<PrintJobCMYK*>(this)->prepareJobForOutput(
+            jobMap, xdpi, ydpi);
+        RasterPayload payload;
+        if (success)
+            success = const_cast<PrintJobCMYK*>(this)->buildRasterPayload(
+                xdpi, ydpi, payload);
+        if (success) {
+            emit outputPhaseChanged(QStringLiteral("generatingPrn"));
+            success = const_cast<PrintJobCMYK*>(this)->writePRNFile(
+                payload, outputPath);
+        }
 
         emit prnGenerationFinished(success);
     });
@@ -68,14 +77,17 @@ void PrintJobCMYK::runPRNGeneration(const QVariantMap& jobMap, const QString& ou
 
 void PrintJobCMYK::runDirectPrint(const QVariantMap& jobMap) {
     (void) QtConcurrent::run([=]() {
+        emit outputPhaseChanged(QStringLiteral("rasterizing"));
         int xdpi = 0;
         int ydpi = 0;
         bool success = const_cast<PrintJobCMYK*>(this)->prepareJobForOutput(jobMap, xdpi, ydpi);
         RasterPayload payload;
         if (success)
             success = const_cast<PrintJobCMYK*>(this)->buildRasterPayload(xdpi, ydpi, payload);
-        if (success)
+        if (success) {
+            emit outputPhaseChanged(QStringLiteral("printing"));
             success = const_cast<PrintJobCMYK*>(this)->sendDirectPrint(payload, jobMap);
+        }
         emit prnGenerationFinished(success);
     });
 }
