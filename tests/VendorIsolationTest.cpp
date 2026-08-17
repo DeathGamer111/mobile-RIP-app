@@ -125,6 +125,9 @@ void VendorIsolationTest::mangledCompatibilitySymbolsAreSupported()
     // Exercise the worker entry condition: discovery has completed, but this
     // client has not connected yet. printPackedJob must route through the same
     // public Choose -> Connect implementation used by Printer Setup.
+    // Release the first fake-SDK owner before creating the isolated worker;
+    // production likewise transfers this single-owner compatibility shim.
+    QVERIFY2(client.resetSdkSession(), qPrintable(client.lastError()));
     NocaiDirectPrintClient printClient;
     printClient.setSdkRootPath(fakeSdk.absolutePath());
     QVERIFY2(printClient.isAvailable(), qPrintable(printClient.lastError()));

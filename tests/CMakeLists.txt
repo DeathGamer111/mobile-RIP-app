@@ -28,14 +28,14 @@ add_test(NAME PrintFlow.Build.DirectPrintSdkStrictMissing
 set_tests_properties(PrintFlow.Build.DirectPrintSdkStrictMissing PROPERTIES
     WILL_FAIL TRUE)
 
-add_test(NAME PrintFlow.Build.DirectPrintSdkStrictAmbiguous
+add_test(NAME PrintFlow.Build.DirectPrintSdkStrictIncomplete
     COMMAND "${CMAKE_COMMAND}"
         -DPRINTFLOW_SOURCE_DIR=${PROJECT_SOURCE_DIR}
-        -DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/direct-print-sdk-strict-ambiguous-test
-        -DTEST_MODE=strict-ambiguous
+        -DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/direct-print-sdk-strict-incomplete-test
+        -DTEST_MODE=strict-incomplete
         -DTEST_HOST_PROCESSOR=${CMAKE_HOST_SYSTEM_PROCESSOR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/DirectPrintSdkHelpersTest.cmake)
-set_tests_properties(PrintFlow.Build.DirectPrintSdkStrictAmbiguous PROPERTIES
+set_tests_properties(PrintFlow.Build.DirectPrintSdkStrictIncomplete PROPERTIES
     WILL_FAIL TRUE)
 
 set(RIP_TEST_ASSET_FILES ${RIP_ASSET_FILES})

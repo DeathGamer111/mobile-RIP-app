@@ -29,26 +29,26 @@ Page {
 	readonly property int cardWidthMedium: 640
 	readonly property int cardWidthWide: 760
 	
-	property var whiteModeOptions: [
-		{ label: "Off", value: 0 },
-		{ label: "Auto Underbase", value: 1 },
-		{ label: "Flood", value: 2 },
-		{ label: "Plate", value: 3 }
-	]
+	property var whiteModeOptions: (strings.language, [
+		{ label: strings.trKey("color.option.off"), value: 0 },
+		{ label: strings.trKey("color.option.autoUnderbase"), value: 1 },
+		{ label: strings.trKey("color.option.flood"), value: 2 },
+		{ label: strings.trKey("color.option.plate"), value: 3 }
+	])
 
-	property var varnishModeOptions: [
-		{ label: "Off", value: 0 },
-		{ label: "Over Printed Area", value: 1 },
-		{ label: "Flood", value: 2 },
-		{ label: "Plate", value: 3 }
-	]
+	property var varnishModeOptions: (strings.language, [
+		{ label: strings.trKey("color.option.off"), value: 0 },
+		{ label: strings.trKey("color.option.overPrintedArea"), value: 1 },
+		{ label: strings.trKey("color.option.flood"), value: 2 },
+		{ label: strings.trKey("color.option.plate"), value: 3 }
+	])
 
-	property var specialtyMaskOptions: [
-		{ label: "White Mask (w)", value: "w" },
-		{ label: "Varnish Mask (v)", value: "v" },
-		{ label: "Reuse Black Mask (k)", value: "k" },
-		{ label: "Reuse Yellow Mask (y)", value: "y" }
-	]
+	property var specialtyMaskOptions: (strings.language, [
+		{ label: strings.trKey("color.mask.white"), value: "w" },
+		{ label: strings.trKey("color.mask.varnish"), value: "v" },
+		{ label: strings.trKey("color.mask.reuseBlack"), value: "k" },
+		{ label: strings.trKey("color.mask.reuseYellow"), value: "y" }
+	])
 
 	function comboIndexForValue(model, value, fallbackIndex) {
 		for (let i = 0; i < model.length; ++i) {
@@ -58,13 +58,17 @@ Page {
 		return fallbackIndex === undefined ? 0 : fallbackIndex
 	}
 
-	function modeHasWhite(mode) {
-		return mode === 5 || mode === 7 || mode === 10
-	}
+    function supportsMultiInkSettings() {
+        return appState.selectedPrinterSupportsMultiInk === true
+    }
 
-	function modeHasVarnish(mode) {
-		return mode === 10
-	}
+    function supportsWhiteSettings() {
+        return appState.selectedPrinterSupportsWhite === true
+    }
+
+    function supportsVarnishSettings() {
+        return appState.selectedPrinterSupportsVarnish === true
+    }
 
     function isMultiInkPrinterName(name) {
         return name === "X-36NC (Photo Printer)"
@@ -98,10 +102,6 @@ Page {
 		colorManager.setMultiInkParams(selectedMode, p)
 	}
 
-    function isModeSupportedForParams(mode) {
-        return mode === 5 || mode === 6 || mode === 7 || mode === 8 || mode === 10
-    }
-
     function syncSelectedModeFromPrinter() {
         // If we are on the multi-ink printer, use the backend's active inkMode()
         if (!hasPrinterSelected()) return
@@ -114,8 +114,8 @@ Page {
                 selectedMode = 6
             }
         } else {
-            // Non-multiink printers: keep editor default
-            selectedMode = 6
+            // X-33 white settings share the five-channel parameter family.
+            selectedMode = supportsWhiteSettings() ? 5 : 4
         }
 
         params = colorManager.getMultiInkParams(selectedMode) || ({})
@@ -224,7 +224,7 @@ Page {
         rebuildICCModelFromBackend()
         syncDropdownsFromManager()
 
-        // NEW: auto-sync mode from actual printer selection
+        // Align per-mode settings with the selected device.
         syncSelectedModeFromPrinter()
     }
 
@@ -235,7 +235,10 @@ Page {
             rebuildICCModelFromBackend()
             syncDropdownsFromManager()
 
-            // NEW: re-sync mode whenever printer changes
+            // Re-sync capabilities and mode whenever the printer changes.
+            syncSelectedModeFromPrinter()
+        }
+        function onMultiInkInkModeChanged() {
             syncSelectedModeFromPrinter()
         }
     }
@@ -245,7 +248,7 @@ Page {
 		anchors.top: parent.top
 		anchors.left: parent.left
 		anchors.right: parent.right
-		height: 60
+		height: theme.appBarHeight
 		color: theme.surface
 
 		RowLayout {
@@ -375,7 +378,7 @@ Page {
 					Label {
 						text: strings.trKey("color.iccProfiles")
 						color: theme.text
-						font.pixelSize: 18
+						font.pixelSize: theme.sectionTitleSize
 						font.weight: Font.Medium
 						Layout.alignment: Qt.AlignHCenter
 					}
@@ -499,7 +502,7 @@ Page {
 
 					FileDialog {
 						id: iccUploadDialog
-						title: "Select ICC Profile"
+						title: strings.trKey("color.selectIcc.title")
 						nameFilters: ["ICC Profiles (*.icc *.icm)", "All Files (*)"]
 						fileMode: FileDialog.OpenFile
 
@@ -522,7 +525,7 @@ Page {
 						        colorManager.setPrinterFamilyOutputProfile(appState.selectedPrinter, currentFamilyKey(), path)
 						    }
 
-						    toast.show("ICC added: " + name)
+						    toast.show(strings.trKey("color.toast.iccAdded") + name)
 						}
 					}
 				}
@@ -548,7 +551,7 @@ Page {
 					Label {
 						text: strings.trKey("color.linearization")
 						color: theme.text
-						font.pixelSize: 18
+						font.pixelSize: theme.sectionTitleSize
 						font.weight: Font.Medium
 						Layout.alignment: Qt.AlignHCenter
 					}
@@ -597,7 +600,7 @@ Page {
 						    enabled: familyDefaultLinearizationPath().length > 0
 						    onClicked: {
 						        colorManager.setFamilyDefaultLinearizationPath(currentFamilyKey(), "")
-						        toast.show("Default linearization cleared.")
+						        toast.show(strings.trKey("color.toast.defaultLinearizationCleared"))
 						    }
 						}
 					}
@@ -632,7 +635,7 @@ Page {
 						        if (!appState.selectedPrinter || appState.selectedPrinter.length === 0)
 						            return
 						        colorManager.setPrinterFamilyLinearizationPath(appState.selectedPrinter, currentFamilyKey(), "")
-						        toast.show("Printer linearization override cleared.")
+						        toast.show(strings.trKey("color.toast.printerLinearizationCleared"))
 						    }
 						}
 					}
@@ -662,20 +665,20 @@ Page {
 
 					FileDialog {
 						id: familyLinearizationDialog
-						title: "Select Default Linearization XML"
+						title: strings.trKey("color.selectDefaultLinearization.title")
 						nameFilters: ["Linearization XML (*.xml)", "All Files (*)"]
 						fileMode: FileDialog.OpenFile
 
 						onAccepted: {
 						    const path = normalizePath(familyLinearizationDialog.file.toString())
 						    colorManager.setFamilyDefaultLinearizationPath(currentFamilyKey(), path)
-						    toast.show("Default linearization updated.")
+						    toast.show(strings.trKey("color.toast.defaultLinearizationUpdated"))
 						}
 					}
 
 					FileDialog {
 						id: printerLinearizationDialog
-						title: "Select Printer Override Linearization XML"
+						title: strings.trKey("color.selectPrinterLinearization.title")
 						nameFilters: ["Linearization XML (*.xml)", "All Files (*)"]
 						fileMode: FileDialog.OpenFile
 
@@ -684,7 +687,7 @@ Page {
 						    if (!appState.selectedPrinter || appState.selectedPrinter.length === 0)
 						        return
 						    colorManager.setPrinterFamilyLinearizationPath(appState.selectedPrinter, currentFamilyKey(), path)
-						    toast.show("Printer linearization override updated.")
+						    toast.show(strings.trKey("color.toast.printerLinearizationUpdated"))
 						}
 					}
 				}
@@ -713,7 +716,7 @@ Page {
 					Label {
 						text: strings.trKey("color.dotStrategyDefaults")
 						color: theme.text
-						font.pixelSize: 18
+						font.pixelSize: theme.sectionTitleSize
 						font.weight: Font.Medium
 						Layout.alignment: Qt.AlignHCenter
 					}
@@ -842,14 +845,15 @@ Page {
 			Pane {
 				Layout.fillWidth: true
 				padding: 16
-				enabled: true
+				visible: !theme.mobile || supportsMultiInkSettings()
+				enabled: supportsMultiInkSettings()
 
 				background: Rectangle {
 					color: theme.surface
 					radius: 12
 					border.width: 1
 					border.color: theme.divider
-					opacity: isModeSupportedForParams(root.selectedMode) ? 1.0 : 0.6
+					opacity: enabled ? 1.0 : 0.6
 				}
 
 				ColumnLayout {
@@ -860,17 +864,17 @@ Page {
 					Label {
 						text: strings.trKey("color.multiInkThresholds")
 						color: theme.text
-						font.pixelSize: 18
+						font.pixelSize: theme.sectionTitleSize
 						font.weight: Font.Medium
 						Layout.alignment: Qt.AlignHCenter
 					}
 
 					Rectangle { height: 1; Layout.fillWidth: true; color: theme.divider; opacity: 0.8 }
 
-					// Hint when disabled
+					// Explain why this device cannot edit multi-ink-only controls.
 					Label {
-						visible: !isModeSupportedForParams(root.selectedMode)
-						text: strings.trKey("color.multiInkThresholds.help")
+						visible: !supportsMultiInkSettings()
+						text: strings.trKey("color.multiInkThresholds.unavailable")
 						color: theme.subtext
 						wrapMode: Text.WordWrap
 						Layout.fillWidth: true
@@ -886,14 +890,14 @@ Page {
                             id: modeCombo
                             Layout.fillWidth: true
 
-                            model: [
-                                { label: "4 – YMCK (no per-mode params)", value: 4 },
-								{ label: "5 – YMCK + W", value: 5 },
-                                { label: "6 – YMCK + Lm + Lc", value: 6 },
-                                { label: "7 – YMCK + Lm + Lc + W", value: 7 },
-                                { label: "8 – YMCK + Lm + Lc + Lk + LLk", value: 8 },
-                                { label: "10 – YMCK + Lm + Lc + Lk + LLk + W + V", value: 10 }
-                            ]
+                            model: (strings.language, [
+                                { label: strings.trKey("color.inkMode4"), value: 4 },
+								{ label: strings.trKey("color.inkMode5"), value: 5 },
+                                { label: strings.trKey("color.inkMode6"), value: 6 },
+                                { label: strings.trKey("color.inkMode7"), value: 7 },
+                                { label: strings.trKey("color.inkMode8"), value: 8 },
+                                { label: strings.trKey("color.inkMode10"), value: 10 }
+                            ])
                             textRole: "label"
                             onActivated: root.loadParamsForMode(model[currentIndex].value)
                         }
@@ -914,12 +918,12 @@ Page {
 						spacing: 10
 
 						// --- Light ink splits ---
-						Label { text: "Light Ink Split (C→C/Lc, M→M/Lm)"; font.bold: true; color: theme.text }
+						Label { text: strings.trKey("color.lightInkSplit"); font.bold: true; color: theme.text }
 
 						// C Light Start
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "C Light Start"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.cLightStart"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 255
@@ -933,7 +937,7 @@ Page {
 						// C Light End
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "C Light End"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.cLightEnd"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 255
@@ -947,7 +951,7 @@ Page {
 						// M Light Start
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "M Light Start"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.mLightStart"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 255
@@ -961,7 +965,7 @@ Page {
 						// M Light End
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "M Light End"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.mLightEnd"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 255
@@ -975,12 +979,12 @@ Page {
 						// --- Light ink min threshold override ---
 						Rectangle { height: 1; Layout.fillWidth: true; color: theme.divider; opacity: 0.45 }
 
-						Label { text: "Light Ink Threshold Override"; font.bold: true; color: theme.text }
+						Label { text: strings.trKey("color.lightInkThresholdOverride"); font.bold: true; color: theme.text }
 
 						RowLayout {
 							Layout.fillWidth: true
 							Label {
-								text: "Override light inks minInkThreshold"
+								text: strings.trKey("color.overrideLightInkThreshold")
 								color: theme.text
 								wrapMode: Text.WordWrap
 								Layout.fillWidth: true
@@ -994,7 +998,7 @@ Page {
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "Light Ink Min Threshold"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.lightInkMinThreshold"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 254
@@ -1018,7 +1022,7 @@ Page {
 
                     Label {
                         visible: selectedMode === 8 || selectedMode === 10
-                        text: "K Split (LLk→Lk→K)"
+                        text: strings.trKey("color.kSplit")
                         font.bold: true
                     }
 
@@ -1030,7 +1034,7 @@ Page {
                         // T1 Start
                         RowLayout {
                             Layout.fillWidth: true
-                            Label { text: "T1 Start"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+                            Label { text: strings.trKey("color.t1Start"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
                             SpinBox {
                                 Layout.fillWidth: true
                                 from: 0; to: 255
@@ -1044,7 +1048,7 @@ Page {
                         // T1 End
                         RowLayout {
                             Layout.fillWidth: true
-                            Label { text: "T1 End"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+                            Label { text: strings.trKey("color.t1End"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
                             SpinBox {
                                 Layout.fillWidth: true
                                 from: 0; to: 255
@@ -1058,7 +1062,7 @@ Page {
                         // T2 Start
                         RowLayout {
                             Layout.fillWidth: true
-                            Label { text: "T2 Start"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+                            Label { text: strings.trKey("color.t2Start"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
                             SpinBox {
                                 Layout.fillWidth: true
                                 from: 0; to: 255
@@ -1072,7 +1076,7 @@ Page {
                         // T2 End
                         RowLayout {
                             Layout.fillWidth: true
-                            Label { text: "T2 End"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+                            Label { text: strings.trKey("color.t2End"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
                             SpinBox {
                                 Layout.fillWidth: true
                                 from: 0; to: 255
@@ -1095,7 +1099,7 @@ Page {
 
 					Label {
 						visible: selectedMode === 5 || selectedMode === 6 || selectedMode === 7 || selectedMode === 8 || selectedMode === 10
-						text: "Neutral / GCR"
+						text: strings.trKey("color.neutralGcr")
 						font.bold: true
 					}
 
@@ -1106,7 +1110,7 @@ Page {
 						
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "Enable GCR"; color: theme.text; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+							Label { text: strings.trKey("color.enableGcr"); color: theme.text; wrapMode: Text.WordWrap; Layout.fillWidth: true }
 							Switch {
                                 Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
 								checked: params.gcrEnabled ?? false
@@ -1116,7 +1120,7 @@ Page {
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "Neutral Gate"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.neutralGate"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 255
@@ -1129,7 +1133,7 @@ Page {
 						
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "GCR Max Tone"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.gcrMaxTone"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 255
@@ -1142,7 +1146,7 @@ Page {
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "GCR Strength"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.gcrStrength"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 255
@@ -1155,7 +1159,7 @@ Page {
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "K Gain"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.kGain"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 255
@@ -1168,7 +1172,7 @@ Page {
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "K Min in Neutral"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.kMinNeutral"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 255
@@ -1182,14 +1186,14 @@ Page {
 						// Fade % is currently only applied in 8 & 10 in the backend (applyNeutralLightInkFade)
 						Label {
 							visible: selectedMode === 8 || selectedMode === 10
-							text: "Light Ink Fade in Neutrals (Color Modes 8/10)"
+							text: strings.trKey("color.lightInkFadeNeutrals")
 							opacity: 0.85
 						}
 
 						RowLayout {
 							visible: selectedMode === 8 || selectedMode === 10
 							Layout.fillWidth: true
-							Label { text: "LC Fade %"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.lcFadePercent"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 100
@@ -1203,7 +1207,7 @@ Page {
 						RowLayout {
 							visible: selectedMode === 8 || selectedMode === 10
 							Layout.fillWidth: true
-							Label { text: "LM Fade %"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.lmFadePercent"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 100
@@ -1219,11 +1223,11 @@ Page {
                     // --- Promotion knobs (all modes) ---
                     Rectangle { height: 1; Layout.fillWidth: true; color: theme.divider; opacity: 0.65 }
 
-                    Label { text: "Promotion Thresholds"; font.bold: true; color: theme.text }
+                    Label { text: strings.trKey("color.promotionThresholds"); font.bold: true; color: theme.text }
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Label { text: "Tone Gate"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+                        Label { text: strings.trKey("color.toneGate"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
                         SpinBox {
                             Layout.fillWidth: true
                             from: 0; to: 255
@@ -1236,7 +1240,7 @@ Page {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Label { text: "Min Neighbor Inked"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+                        Label { text: strings.trKey("color.minNeighborInked"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
                         SpinBox {
                             Layout.fillWidth: true
                             from: 0; to: 64
@@ -1249,7 +1253,7 @@ Page {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Label { text: "Med Lo"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+                        Label { text: strings.trKey("color.mediumLow"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
                         SpinBox {
                             Layout.fillWidth: true
                             from: 0; to: 255
@@ -1262,7 +1266,7 @@ Page {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Label { text: "Med Hi"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+                        Label { text: strings.trKey("color.mediumHigh"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
                         SpinBox {
                             Layout.fillWidth: true
                             from: 0; to: 255
@@ -1275,7 +1279,7 @@ Page {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Label { text: "Kick Bonus"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+                        Label { text: strings.trKey("color.kickBonus"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
                         SpinBox {
                             Layout.fillWidth: true
                             from: 0; to: 16
@@ -1288,7 +1292,7 @@ Page {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Label { text: "Large Lo"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+                        Label { text: strings.trKey("color.largeLow"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
                         SpinBox {
                             Layout.fillWidth: true
                             from: 0; to: 255
@@ -1301,7 +1305,7 @@ Page {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Label { text: "Large Hi"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+                        Label { text: strings.trKey("color.largeHigh"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
                         SpinBox {
                             Layout.fillWidth: true
                             from: 0; to: 255
@@ -1314,7 +1318,7 @@ Page {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Label { text: "Flat Var Eps"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+                        Label { text: strings.trKey("color.flatVarianceEpsilon"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
                         SpinBox {
                             Layout.fillWidth: true
                             from: 0; to: 255
@@ -1330,7 +1334,7 @@ Page {
             Pane {
 				Layout.fillWidth: true
 				padding: 16
-				enabled: modeHasWhite(root.selectedMode) || modeHasVarnish(root.selectedMode)
+				enabled: supportsWhiteSettings() || supportsVarnishSettings()
 
 				background: Rectangle {
 					color: theme.surface
@@ -1346,9 +1350,11 @@ Page {
 					spacing: 12
 
 					Label {
-						text: "White / Varnish Defaults (Per-Mode)"
+						text: supportsWhiteSettings() && !supportsVarnishSettings()
+                              ? strings.trKey("color.whiteDefaults")
+                              : strings.trKey("color.specialtyDefaults")
 						color: theme.text
-						font.pixelSize: 18
+						font.pixelSize: theme.sectionTitleSize
 						font.weight: Font.Medium
 						Layout.alignment: Qt.AlignHCenter
 					}
@@ -1356,8 +1362,8 @@ Page {
 					Rectangle { height: 1; Layout.fillWidth: true; color: theme.divider; opacity: 0.8 }
 
 					Label {
-						visible: !(modeHasWhite(root.selectedMode) || modeHasVarnish(root.selectedMode))
-						text: "Specialty ink settings are only available for modes with White and/or Varnish."
+						visible: !(supportsWhiteSettings() || supportsVarnishSettings())
+						text: strings.trKey("color.specialtyUnavailable")
 						color: theme.subtext
 						wrapMode: Text.WordWrap
 						Layout.fillWidth: true
@@ -1367,7 +1373,7 @@ Page {
 					// White
 					// =========================
 					Rectangle {
-						visible: modeHasWhite(root.selectedMode)
+						visible: supportsWhiteSettings()
 						height: 1
 						Layout.fillWidth: true
 						color: theme.divider
@@ -1375,20 +1381,20 @@ Page {
 					}
 
 					Label {
-						visible: modeHasWhite(root.selectedMode)
-						text: "White"
+						visible: supportsWhiteSettings()
+						text: strings.trKey("color.white")
 						font.bold: true
 						color: theme.text
 					}
 
 					ColumnLayout {
-						visible: modeHasWhite(root.selectedMode)
+						visible: supportsWhiteSettings()
 						Layout.fillWidth: true
 						spacing: 10
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "White Mode"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.whiteMode"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							ComboBox {
 								Layout.fillWidth: true
 								model: root.whiteModeOptions
@@ -1400,7 +1406,7 @@ Page {
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "White Threshold"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.whiteThreshold"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 255
@@ -1413,7 +1419,7 @@ Page {
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "White Density"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.whiteDensity"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 255
@@ -1428,7 +1434,7 @@ Page {
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "Mask Selection"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.maskSelection"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							ComboBox {
 								Layout.fillWidth: true
 								model: root.specialtyMaskOptions
@@ -1442,7 +1448,7 @@ Page {
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "Own Screening Settings"; color: theme.text; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+							Label { text: strings.trKey("color.ownScreeningSettings"); color: theme.text; wrapMode: Text.WordWrap; Layout.fillWidth: true }
 							Switch {
                                 Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
 								checked: params.whiteUseOwnDotStrategy ?? false
@@ -1457,7 +1463,7 @@ Page {
 
 							RowLayout {
 								Layout.fillWidth: true
-								Label { text: "White Small Dot"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+								Label { text: strings.trKey("color.whiteSmallDot"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 								SpinBox {
 								    Layout.fillWidth: true
 								    from: 0; to: 255
@@ -1470,7 +1476,7 @@ Page {
 
 							RowLayout {
 								Layout.fillWidth: true
-								Label { text: "White Medium Dot"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+								Label { text: strings.trKey("color.whiteMediumDot"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 								SpinBox {
 								    Layout.fillWidth: true
 								    from: 0; to: 255
@@ -1497,7 +1503,7 @@ Page {
 					// Varnish
 					// =========================
 					Rectangle {
-						visible: modeHasVarnish(root.selectedMode)
+						visible: supportsVarnishSettings()
 						height: 1
 						Layout.fillWidth: true
 						color: theme.divider
@@ -1505,20 +1511,20 @@ Page {
 					}
 
 					Label {
-						visible: modeHasVarnish(root.selectedMode)
-						text: "Varnish"
+						visible: supportsVarnishSettings()
+						text: strings.trKey("color.varnish")
 						font.bold: true
 						color: theme.text
 					}
 
 					ColumnLayout {
-						visible: modeHasVarnish(root.selectedMode)
+						visible: supportsVarnishSettings()
 						Layout.fillWidth: true
 						spacing: 10
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "Varnish Mode"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.varnishMode"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							ComboBox {
 								Layout.fillWidth: true
 								model: root.varnishModeOptions
@@ -1530,7 +1536,7 @@ Page {
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "Varnish Threshold"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.varnishThreshold"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 255
@@ -1543,7 +1549,7 @@ Page {
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "Varnish Density"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.varnishDensity"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							SpinBox {
 								Layout.fillWidth: true
 								from: 0; to: 255
@@ -1558,7 +1564,7 @@ Page {
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "Mask Selection"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+							Label { text: strings.trKey("color.maskSelection"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 							ComboBox {
 								Layout.fillWidth: true
 								model: root.specialtyMaskOptions
@@ -1572,7 +1578,7 @@ Page {
 
 						RowLayout {
 							Layout.fillWidth: true
-							Label { text: "Own Screening Settings"; color: theme.text; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+							Label { text: strings.trKey("color.ownScreeningSettings"); color: theme.text; wrapMode: Text.WordWrap; Layout.fillWidth: true }
 							Switch {
                                 Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
 								checked: params.varnishUseOwnDotStrategy ?? false
@@ -1587,7 +1593,7 @@ Page {
 
 							RowLayout {
 								Layout.fillWidth: true
-								Label { text: "Varnish Small Dot"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+								Label { text: strings.trKey("color.varnishSmallDot"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 								SpinBox {
 								    Layout.fillWidth: true
 								    from: 0; to: 255
@@ -1600,7 +1606,7 @@ Page {
 
 							RowLayout {
 								Layout.fillWidth: true
-								Label { text: "Varnish Medium Dot"; Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
+								Label { text: strings.trKey("color.varnishMediumDot"); Layout.preferredWidth: theme.formLabelWidth(parent.width, 180); color: theme.text }
 								SpinBox {
 								    Layout.fillWidth: true
 								    from: 0; to: 255

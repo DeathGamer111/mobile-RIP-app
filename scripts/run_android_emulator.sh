@@ -3,11 +3,12 @@
 set -euo pipefail
 
 BUILD_DIR="${BUILD_DIR:-build-android}"
-AVD_NAME="${AVD_NAME:-PrintFlow_Pixel_1080p}"
+AVD_NAME="${AVD_NAME:-PrintFlow_Pixel_1080p_API35}"
 PACKAGE_NAME="${PACKAGE_NAME:-com.ripapp.printer}"
 ACTIVITY_NAME="${ACTIVITY_NAME:-org.qtproject.qt.android.bindings.QtActivity}"
 STREAM_LOGCAT="${STREAM_LOGCAT:-0}"
 EMULATOR_HEADLESS="${EMULATOR_HEADLESS:-0}"
+EMULATOR_GPU_MODE="${EMULATOR_GPU_MODE:-host}"
 EMULATOR_EXTRA_ARGS="${EMULATOR_EXTRA_ARGS:--no-metrics}"
 EMULATOR_ALLOW_NO_KVM="${EMULATOR_ALLOW_NO_KVM:-0}"
 
@@ -42,7 +43,7 @@ fi
 
 if ! adb get-state >/dev/null 2>&1; then
     printf 'Starting emulator: %s\n' "${AVD_NAME}"
-    emulator_args=(-avd "${AVD_NAME}" -netdelay none -netspeed full)
+    emulator_args=(-avd "${AVD_NAME}" -gpu "${EMULATOR_GPU_MODE}" -netdelay none -netspeed full)
     if [[ "${EMULATOR_HEADLESS}" == "1" ]]; then
         emulator_args+=(-no-window -no-audio)
     fi
@@ -51,7 +52,7 @@ if ! adb get-state >/dev/null 2>&1; then
         extra_args=(${EMULATOR_EXTRA_ARGS})
         emulator_args+=("${extra_args[@]}")
     fi
-    emulator "${emulator_args[@]}" >/tmp/printflow-emulator.log 2>&1 &
+    nohup emulator "${emulator_args[@]}" </dev/null >/tmp/printflow-emulator.log 2>&1 &
     emulator_pid=$!
     sleep 4
     if ! kill -0 "${emulator_pid}" >/dev/null 2>&1; then

@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import "."
 
 /* ImpositionView.qml
- * Canvas-style editor to position a job image on a physical page (paperSize in mm)
+ * Canvas-style editor to position a job image on physical media (legacy paperSize field, in mm)
  * and optionally burn simple overlays (text/rectangle) into a new imposed image.
  * Coordinates persist as mm offsets; zoom only affects on-screen scale.
  */
@@ -30,7 +30,7 @@ Page {
     // Function to pull in current job model
     function jobData() { return jobModel.getJob(jobIndex) }
 
-    // Source + media state (paper size in mm)
+    // Source + media state (dimensions in mm)
 	property string imagePath: (initialImagePath && initialImagePath.length > 0)
 		                       ? initialImagePath
 		                       : jobData().imagePath
@@ -40,7 +40,7 @@ Page {
     // Overlay state
     property bool hasDrawnElements: false
 
-    // Zoom (1.0 = 100%) auto-fit based on paper size and viewport box
+    // Zoom (1.0 = 100%) auto-fit based on media size and viewport box
     property real zoomFactor: 1.0
 
     // Build an updated job payload; optionally swap imagePath when overlays are baked in
@@ -128,7 +128,7 @@ Page {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: 60
+        height: theme.appBarHeight
         color: theme.surface
 
         RowLayout {
@@ -199,7 +199,7 @@ Page {
 
                 background: Rectangle {
                     color: theme.surface
-                    radius: 12
+                        radius: theme.cardRadius
                     border.width: 1
                     border.color: theme.divider
                 }
@@ -213,9 +213,9 @@ Page {
                     Rectangle {
                         id: impositionViewport
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 400
-                        Layout.minimumHeight: 260
-                        Layout.maximumHeight: 400
+                        Layout.preferredHeight: theme.mobile ? 240 : 400
+                        Layout.minimumHeight: theme.mobile ? 200 : 260
+                        Layout.maximumHeight: theme.mobile ? 240 : 400
                         color: theme.surface2
                         border.color: theme.divider
                         border.width: 1
@@ -417,7 +417,7 @@ Page {
                     Label {
                         text: strings.trKey("imposition.overlayTools")
                         color: theme.text
-                        font.pixelSize: 18
+                        font.pixelSize: theme.sectionTitleSize
                         font.weight: Font.Medium
                         Layout.alignment: Qt.AlignHCenter
                     }
@@ -480,7 +480,7 @@ Page {
 						// --- Rect tool: W/H controls row, then button row ---
 						GridLayout {
 							Layout.fillWidth: true
-							columns: theme.gridColumns(width, 4, 96)
+							columns: theme.mobile ? 2 : theme.gridColumns(width, 4, 96)
 							columnSpacing: 10
                             rowSpacing: 10
 

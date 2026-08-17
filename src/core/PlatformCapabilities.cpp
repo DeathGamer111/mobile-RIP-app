@@ -36,5 +36,10 @@ bool PlatformCapabilities::supportsRipProcessing() const
 
 bool PlatformCapabilities::supportsDirectPrint() const
 {
+#if defined(Q_OS_ANDROID) && !defined(RIP_DIRECT_PRINT_SDK_BUNDLED) && \
+    !defined(RIP_ANDROID_PRINTER_BRIDGE)
+    return false;
+#else
     return true;
+#endif
 }

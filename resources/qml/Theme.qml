@@ -51,10 +51,27 @@ QtObject {
     property string copyrightText: manager ? manager.copyrightText : ""
 
     readonly property bool mobile: Qt.platform.os === "android" || Qt.platform.os === "ios"
-    readonly property int defaultWindowWidth: 430
+    readonly property int defaultWindowWidth: 500
     readonly property int defaultWindowHeight: 720
-    readonly property int pageMargin: mobile ? 10 : 12
-    readonly property int panePadding: mobile ? 12 : 16
+    // Shared layout tokens. Android uses a restrained 8 dp grid and keeps
+    // typography compact enough for a 360-420 dp phone viewport.
+    readonly property int spaceXs: 4
+    readonly property int spaceSm: 8
+    readonly property int spaceMd: 12
+    readonly property int spaceLg: 16
+    readonly property int spaceXl: 24
+    readonly property int pageMargin: mobile ? spaceMd : 12
+    readonly property int panePadding: mobile ? spaceLg : 16
+    readonly property int appBarHeight: mobile ? 56 : 60
+    readonly property int controlHeight: mobile ? 48 : 40
+    readonly property int compactControlHeight: mobile ? 44 : 40
+    readonly property int cardRadius: mobile ? 14 : 12
+    readonly property int controlRadius: mobile ? 12 : 8
+    readonly property int bodyTextSize: mobile ? 14 : 14
+    readonly property int labelTextSize: mobile ? 14 : 14
+    readonly property int buttonTextSize: mobile ? 14 : 13
+    readonly property int sectionTitleSize: mobile ? 16 : 18
+    readonly property int pageTitleSize: mobile ? 20 : 20
 
     function boundedWidth(availableWidth, maxWidth) {
         if (availableWidth <= 0)
@@ -63,13 +80,15 @@ QtObject {
     }
 
     function headerButtonWidth(availableWidth) {
+        if (mobile)
+            return availableWidth < 380 ? 76 : 88
         if (availableWidth < 340)
             return 64
         return availableWidth < 380 ? 72 : 88
     }
 
     function headerTitleSize(availableWidth) {
-        return availableWidth < 360 ? 17 : 20
+        return availableWidth < 360 ? 18 : pageTitleSize
     }
 
     function formLabelWidth(availableWidth, preferredWidth) {
@@ -86,5 +105,13 @@ QtObject {
 
         const columns = Math.max(1, Math.floor(availableWidth / minCellWidth))
         return Math.max(1, Math.min(preferredColumns, columns))
+    }
+
+    // Long action labels should stack on phones instead of being elided into
+    // ambiguous fragments. Two columns remain available for short controls.
+    function actionColumns(availableWidth, preferredColumns, minCellWidth) {
+        if (mobile && availableWidth < 480)
+            return 1
+        return gridColumns(availableWidth, preferredColumns, minCellWidth)
     }
 }

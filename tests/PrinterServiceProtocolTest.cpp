@@ -14,6 +14,7 @@ private slots:
     void settingsRoundTrip();
     void rasterRoundTrip();
     void malformedRasterIsRejected();
+    void bridgeAddressIsLoopbackOnly();
 };
 
 void PrinterServiceProtocolTest::frameRoundTrip()
@@ -168,6 +169,18 @@ void PrinterServiceProtocolTest::malformedRasterIsRejected()
     QVERIFY(!PrintFlowPrinterServiceProtocol::deserializeRaster(
         metadata, QByteArray(7, '\0'), &storage, &raster, &error));
     QVERIFY(error.contains(QStringLiteral("length")));
+}
+
+void PrinterServiceProtocolTest::bridgeAddressIsLoopbackOnly()
+{
+    QVERIFY(PrintFlowPrinterServiceProtocol::isAllowedBridgeAddress(
+        QHostAddress::LocalHost));
+    QVERIFY(PrintFlowPrinterServiceProtocol::isAllowedBridgeAddress(
+        QHostAddress::LocalHostIPv6));
+    QVERIFY(!PrintFlowPrinterServiceProtocol::isAllowedBridgeAddress(
+        QHostAddress::AnyIPv4));
+    QVERIFY(!PrintFlowPrinterServiceProtocol::isAllowedBridgeAddress(
+        QHostAddress(QStringLiteral("192.0.2.10"))));
 }
 
 QTEST_MAIN(PrinterServiceProtocolTest)

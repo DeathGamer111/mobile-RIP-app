@@ -30,16 +30,39 @@ if(TEST_MODE STREQUAL "helpers")
     assert_equal("${normalized}" "arm64" "ARM64 normalization")
     assert_equal("${socket}" "arm64" "ARM64 socket folder")
 
-    file(WRITE "${PROJECT_SOURCE_DIR}/DemoForARM64Linux-test.tar" "fixture")
-    file(WRITE "${PROJECT_SOURCE_DIR}/DemoForX64Linux-test.zip" "fixture")
-    _printflow_find_auto_sdk_archive("arm64" selected_archive)
-    assert_equal("${selected_archive}"
-        "${PROJECT_SOURCE_DIR}/DemoForARM64Linux-test.tar"
-        "ARM64 archive selection")
-    _printflow_find_auto_sdk_archive("x86_64" selected_archive)
-    assert_equal("${selected_archive}"
-        "${PROJECT_SOURCE_DIR}/DemoForX64Linux-test.zip"
-        "x86-64 archive selection")
+    _printflow_sdk_paths("/sdk" "linux" "arm64" api socket)
+    assert_equal("${api}" "/sdk/linux/arm64/libSYPrintAPIforPROII.so"
+        "ARM64 API path")
+    assert_equal("${socket}" "/sdk/linux/arm64/PrinterSocket.so"
+        "ARM64 socket path")
+
+    _printflow_sdk_paths("/sdk" "linux" "x86_64" api socket)
+    assert_equal("${api}" "/sdk/linux/x86_64/libSYPrintAPIforPROII.so"
+        "x86-64 API path")
+    assert_equal("${socket}" "/sdk/linux/x86_64/PrinterSocket.so"
+        "x86-64 socket path")
+
+    foreach(sdk_arch IN ITEMS arm64 x86_64)
+        _printflow_sdk_paths("${PRINTFLOW_SOURCE_DIR}/third_party/nocai/direct-print"
+            "linux" "${sdk_arch}" api socket)
+        foreach(library IN ITEMS "${api}" "${socket}")
+            if(NOT EXISTS "${library}")
+                message(FATAL_ERROR "Bundled ${sdk_arch} SDK file is missing: ${library}")
+            endif()
+            _printflow_validate_elf_arch("${library}" "${sdk_arch}" valid_sdk_elf)
+            if(NOT valid_sdk_elf)
+                message(FATAL_ERROR
+                    "Bundled ${sdk_arch} SDK file failed ELF validation: ${library}")
+            endif()
+        endforeach()
+    endforeach()
+
+    _printflow_validate_android_elf(
+        "${PRINTFLOW_SOURCE_DIR}/third_party/nocai/direct-print/linux/arm64/libSYPrintAPIforPROII.so"
+        linux_arm_is_android)
+    if(linux_arm_is_android)
+        message(FATAL_ERROR "The Linux ARM64 SDK was accepted as an Android library.")
+    endif()
 
     _printflow_normalize_sdk_arch("${TEST_HOST_PROCESSOR}" host_arch unused_socket)
     _printflow_validate_elf_arch("${CMAKE_COMMAND}" "${host_arch}" valid_host_elf)
@@ -58,11 +81,14 @@ if(TEST_MODE STREQUAL "helpers")
 elseif(TEST_MODE STREQUAL "strict-missing")
     set(DIRECT_PRINT_SDK_STRICT ON CACHE BOOL "" FORCE)
     _printflow_report_sdk_failure("Strict mode rejected a missing direct-print SDK.")
-elseif(TEST_MODE STREQUAL "strict-ambiguous")
+elseif(TEST_MODE STREQUAL "strict-incomplete")
     set(DIRECT_PRINT_SDK_STRICT ON CACHE BOOL "" FORCE)
-    file(WRITE "${PROJECT_SOURCE_DIR}/DemoForARM64Linux-a.tar" "fixture")
-    file(WRITE "${PROJECT_SOURCE_DIR}/DemoForARM64Linux-b.tar" "fixture")
-    _printflow_find_auto_sdk_archive("arm64" selected_archive)
+    _printflow_sdk_paths("${PROJECT_SOURCE_DIR}" "linux" "arm64" api socket)
+    file(MAKE_DIRECTORY "${PROJECT_SOURCE_DIR}/linux/arm64")
+    file(WRITE "${api}" "incomplete fixture")
+    if(NOT EXISTS "${api}" OR NOT EXISTS "${socket}")
+        _printflow_report_sdk_failure("Strict mode rejected an incomplete SDK pair.")
+    endif()
 else()
     message(FATAL_ERROR "Unknown TEST_MODE: ${TEST_MODE}")
 endif()

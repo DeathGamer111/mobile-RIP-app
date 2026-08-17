@@ -7,7 +7,7 @@ cd "${REPO_ROOT}"
 
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${REPO_ROOT}/.android-sdk}"
 ANDROID_TARGET="${ANDROID_TARGET:-emulator}"
-AVD_NAME="${AVD_NAME:-${ANDROID_AVD_NAME:-PrintFlow_Pixel_1080p}}"
+AVD_NAME="${AVD_NAME:-${ANDROID_AVD_NAME:-PrintFlow_Pixel_1080p_API35}}"
 if [[ "${ANDROID_TARGET}" == "device" ]]; then
     ANDROID_ABI="${ANDROID_ABI:-arm64-v8a}"
     BUILD_DIR="${BUILD_DIR:-build-android-device}"

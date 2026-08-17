@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QLocalSocket>
 #include <QProcess>
+#include <QTcpSocket>
 #include <QThread>
 #include <QtConcurrent>
 
@@ -27,6 +28,14 @@ constexpr int kJobTimeoutMs = 30 * 60 * 1000;
 constexpr int kMaintenanceTimeoutMs = 10 * 60 * 1000;
 constexpr int kServiceShutdownTimeoutMs = 10000;
 constexpr qint64 kDiagnosticLogReadLimit = 512 * 1024;
+constexpr quint16 kAndroidBridgePort = 19733;
+
+QString androidBridgeHost()
+{
+    const QString configured = qEnvironmentVariable(
+        "PRINTFLOW_ANDROID_BRIDGE_HOST").trimmed();
+    return configured.isEmpty() ? QStringLiteral("127.0.0.1") : configured;
+}
 
 QString serviceExecutablePath()
 {
@@ -152,7 +161,16 @@ PrinterServiceClient::PrinterServiceClient(QObject* parent)
         emit statusChanged();
     });
 
-    request(QStringLiteral("ping"));
+    const QVariantMap initialResponse = request(QStringLiteral("ping"));
+#if defined(Q_OS_ANDROID)
+    if (initialResponse.value(QStringLiteral("ok")).toBool()) {
+        qInfo("Android printer bridge handshake succeeded.");
+    } else {
+        qWarning("Android printer bridge handshake failed: %s",
+                 qPrintable(initialResponse.value(
+                     QStringLiteral("error")).toString()));
+    }
+#endif
 }
 
 PrinterServiceClient::~PrinterServiceClient()
@@ -307,25 +325,40 @@ bool PrinterServiceClient::startReconnectPrinter(int printerIndex)
 
 bool PrinterServiceClient::startRestartService(int printerIndex)
 {
+#if defined(Q_OS_ANDROID)
+    // The Android client must never shut down the host service. Reconnect the
+    // SDK session while leaving the ADB tunnel and Linux bridge process alive.
+    return startReconnectPrinter(printerIndex);
+#else
     return startAsyncAction(QStringLiteral("RestartPrinterService"),
                             [this, printerIndex]() {
         return restartService(printerIndex);
     });
+#endif
 }
 
 QString PrinterServiceClient::diagnosticLogPath() const
 {
+#if defined(Q_OS_ANDROID)
+    return QStringLiteral("Printer-service diagnostics are stored on the Linux bridge host.");
+#else
     return serviceLogPath();
+#endif
 }
 
 QString PrinterServiceClient::diagnosticLog() const
 {
+#if defined(Q_OS_ANDROID)
+    return QStringLiteral(
+        "Read the PrintFlow printer-service log on the Linux bridge host.");
+#else
     QFile log(serviceLogPath());
     if (!log.open(QIODevice::ReadOnly))
         return {};
     if (log.size() > kDiagnosticLogReadLimit)
         log.seek(log.size() - kDiagnosticLogReadLimit);
     return QString::fromUtf8(log.readAll());
+#endif
 }
 
 bool PrinterServiceClient::wipePrintHead(int printHeadMask)
@@ -708,10 +741,16 @@ QVariantMap PrinterServiceClient::exchange(const QString& command,
                 {QStringLiteral("error"), startupError}};
     }
 
+#if defined(Q_OS_ANDROID)
+    QTcpSocket socket;
+    socket.connectToHost(androidBridgeHost(), kAndroidBridgePort,
+                         QIODevice::ReadWrite);
+#else
     QLocalSocket socket;
     socket.connectToServer(
         PrintFlowPrinterServiceProtocol::defaultSocketName(),
         QIODevice::ReadWrite);
+#endif
     if (!socket.waitForConnected(std::min(timeoutMs, 3000))) {
         return {{QStringLiteral("ok"), false},
                 {QStringLiteral("error"),
@@ -737,7 +776,7 @@ QVariantMap PrinterServiceClient::exchange(const QString& command,
     while (socket.bytesToWrite() > 0 && !deadline.hasExpired()) {
         if (!socket.waitForBytesWritten(
                 std::max(1, int(std::min<qint64>(deadline.remainingTime(), 1000))))) {
-            if (socket.error() != QLocalSocket::UnknownSocketError)
+            if (socket.error() != decltype(socket)::UnknownSocketError)
                 break;
         }
     }
@@ -763,7 +802,7 @@ QVariantMap PrinterServiceClient::exchange(const QString& command,
         const int waitMs = std::max(
             1, int(std::min<qint64>(deadline.remainingTime(), 1000)));
         if (!socket.waitForReadyRead(waitMs) &&
-            socket.state() == QLocalSocket::UnconnectedState) {
+            socket.state() == decltype(socket)::UnconnectedState) {
             responseBuffer.append(socket.readAll());
             const auto finalStatus = PrintFlowPrinterServiceProtocol::takeFrame(
                 responseBuffer, &decoded, &decodeError);
@@ -783,6 +822,16 @@ bool PrinterServiceClient::ensureService(QString* errorMessage)
                                           1000, false);
     if (existing.value(QStringLiteral("ok")).toBool())
         return true;
+
+#if defined(Q_OS_ANDROID)
+    if (errorMessage) {
+        *errorMessage = QStringLiteral(
+            "The temporary Android printer bridge is unavailable at %1:%2. Run scripts/run_android_printer_bridge.sh with this device attached.")
+                            .arg(androidBridgeHost())
+                            .arg(kAndroidBridgePort);
+    }
+    return false;
+#else
 
     const QString executable = serviceExecutablePath();
     if (!QFileInfo::exists(executable)) {
@@ -828,6 +877,7 @@ bool PrinterServiceClient::ensureService(QString* errorMessage)
                             .arg(kServiceStartupTimeoutMs / 1000);
     }
     return false;
+#endif
 }
 
 void PrinterServiceClient::applyResponse(const QVariantMap& response)

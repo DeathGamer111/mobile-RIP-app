@@ -94,11 +94,13 @@ assets/blue_noise_mask_*/**
 resources/assets/blue_noise_mask_*/**
 /resources/assets.tar.gz
 
-# Local vendor SDK drops
+# Raw vendor SDK drops and diagnostics are local-only. The four curated Linux
+# runtime libraries under third_party/nocai/direct-print are explicit exceptions.
 DemoFor*Linux*/
 DemoFor*Linux*.zip
 DemoFor*Linux*.tar
 DemoFor*Linux*.tar.gz
+/sdk-diagnostics/
 /*-diagnostics.tar.gz
 src/vendor/nocai/SDKExample*/
 src/vendor/nocai/sdk*/
@@ -110,6 +112,21 @@ src/vendor/nocai/*.so.*
 !src/vendor/nocai/*.cpp
 !src/vendor/nocai/*.h
 !src/vendor/nocai/README.md
+!/third_party/nocai/direct-print/linux/arm64/libSYPrintAPIforPROII.so
+!/third_party/nocai/direct-print/linux/arm64/PrinterSocket.so
+!/third_party/nocai/direct-print/linux/x86_64/libSYPrintAPIforPROII.so
+!/third_party/nocai/direct-print/linux/x86_64/PrinterSocket.so
+!/third_party/imagemagick/android/lib/
+!/third_party/imagemagick/android/lib/x86_64/
+!/third_party/imagemagick/android/lib/x86_64/libmagick++-7.so
+!/third_party/imagemagick/android/lib/x86_64/libmagickcore-7.so
+!/third_party/imagemagick/android/lib/x86_64/libmagickwand-7.so
+!/third_party/imagemagick/android/lib/x86_64/libomp.so
+!/third_party/imagemagick/android/lib/arm64-v8a/
+!/third_party/imagemagick/android/lib/arm64-v8a/libmagick++-7.so
+!/third_party/imagemagick/android/lib/arm64-v8a/libmagickcore-7.so
+!/third_party/imagemagick/android/lib/arm64-v8a/libmagickwand-7.so
+!/third_party/imagemagick/android/lib/arm64-v8a/libomp.so
 
 # Local Android SDK command-line installs
 .android-sdk/

@@ -32,7 +32,9 @@ Page {
     }
 
     // Edit/session state
-    property bool isDirty: true
+    property bool isDirty: false
+    property bool editorReady: false
+    property bool editorStarting: true
     property string currentTool: "none"
 
     // Crop tool state (editor units / preview overlay)
@@ -73,21 +75,29 @@ Page {
         }
     }
 
-    // Initialize editor: stage temp copy, then load it for live edits
-    Component.onCompleted: {
+    // Stage the working copy after the page has completed its first layout.
+    // Keeping the preview source empty until the file exists prevents the
+    // Android scene graph from racing the ImageMagick write during navigation.
+    function beginEditorSession() {
         if (imageEditor.loadImage(imagePath)) {
-            imageEditor.saveImage(tempPath)
-
-            if (imageEditor.loadImage(tempPath)) {
+            if (imageEditor.saveImage(tempPath) && imageEditor.loadImage(tempPath)) {
+                editorReady = true
+                editorStarting = false
                 refreshImage()
                 refreshImageSize()
             } else {
+                editorStarting = false
                 console.warn("Failed to load temp image for editing")
+                toast.show(strings.trKey("imageEditor.toast.saveFailed"))
             }
         } else {
+            editorStarting = false
             console.warn("Failed to load image for editing")
+            toast.show(strings.trKey("imageEditor.toast.saveFailed"))
         }
     }
+
+    Component.onCompleted: Qt.callLater(beginEditorSession)
 
     // ---------- Header (Back / Title / Save) ----------
     Rectangle {
@@ -95,7 +105,7 @@ Page {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: 60
+        height: theme.appBarHeight
         color: theme.surface
 
         RowLayout {
@@ -152,7 +162,7 @@ Page {
         // Preview pane with optional crop overlay
         Pane {
             Layout.fillWidth: true
-            Layout.preferredHeight: 260
+            Layout.preferredHeight: theme.mobile ? 190 : 260
             padding: theme.panePadding
 
             background: Rectangle {
@@ -172,7 +182,7 @@ Page {
 
                 Image {
                     id: imagePreview
-                    source: tempPath
+                    source: ""
                     fillMode: Image.PreserveAspectFit
                     smooth: true
                     cache: false
@@ -233,7 +243,7 @@ Page {
 						Label {
 							text: strings.trKey("imageEditor.view")
 							color: theme.text
-							font.pixelSize: 18
+							font.pixelSize: theme.sectionTitleSize
 							font.weight: Font.Medium
 							Layout.alignment: Qt.AlignHCenter
 						}
@@ -242,7 +252,7 @@ Page {
 
 						GridLayout {
 							Layout.fillWidth: true
-                            columns: theme.gridColumns(width, 3, 118)
+                            columns: theme.actionColumns(width, 3, 118)
 							columnSpacing: 10
                             rowSpacing: 10
 
@@ -257,43 +267,46 @@ Page {
 							Layout.alignment: Qt.AlignHCenter
 						}
 
-						// Make resize row responsive (can wrap to two rows if narrow)
-						GridLayout {
+						ColumnLayout {
 							Layout.fillWidth: true
-							columns: theme.gridColumns(width, 4, 120)
-							columnSpacing: 8
-							rowSpacing: 8
+							spacing: 8
 
-							SpinBox {
-								id: resizeWidthSpin
+							RowLayout {
 								Layout.fillWidth: true
-								from: 1; to: 10000
-								value: 100
-								editable: true
-								validator: IntValidator { bottom: 1 }
-							}
+								spacing: 8
 
-							Label {
-								text: "×"
-								color: theme.text
-								horizontalAlignment: Text.AlignHCenter
-								Layout.alignment: Qt.AlignVCenter
-							}
+								SpinBox {
+									id: resizeWidthSpin
+									Layout.fillWidth: true
+									Layout.minimumWidth: 0
+									from: 1; to: 10000
+									value: 100
+									editable: true
+									validator: IntValidator { bottom: 1 }
+								}
 
-							SpinBox {
-								id: resizeHeightSpin
-								Layout.fillWidth: true
-								from: 1; to: 10000
-								value: 100
-								editable: true
-								validator: IntValidator { bottom: 1 }
+								Label {
+									text: "×"
+									color: theme.text
+									horizontalAlignment: Text.AlignHCenter
+									Layout.alignment: Qt.AlignVCenter
+								}
+
+								SpinBox {
+									id: resizeHeightSpin
+									Layout.fillWidth: true
+									Layout.minimumWidth: 0
+									from: 1; to: 10000
+									value: 100
+									editable: true
+									validator: IntValidator { bottom: 1 }
+								}
 							}
 
 							ThemedButton {
 								text: strings.trKey("imageEditor.resize")
 								theme: editorPage.theme
 								Layout.fillWidth: true
-								Layout.columnSpan: (parent.columns === 2 ? 2 : 1)   // if 2-col layout, put button on its own row
 								onClicked: apply("resize", { x: resizeWidthSpin.value, y: resizeHeightSpin.value })
 							}
 						}
@@ -322,7 +335,7 @@ Page {
 						Label {
 							text: strings.trKey("imageEditor.transform")
 							color: theme.text
-							font.pixelSize: 18
+							font.pixelSize: theme.sectionTitleSize
 							font.weight: Font.Medium
 							Layout.alignment: Qt.AlignHCenter
 						}
@@ -338,7 +351,7 @@ Page {
 
 							// 4 buttons total
 							// 1 row if wide enough, otherwise 2×2
-							columns: theme.gridColumns(parent.width, 4, 104)
+							columns: theme.mobile ? 2 : theme.gridColumns(parent.width, 4, 104)
 
 							// Match Effects sizing
 							readonly property int btnW: Math.floor(
@@ -403,7 +416,7 @@ Page {
                         Label {
                             text: strings.trKey("imageEditor.enhance")
                             color: theme.text
-                            font.pixelSize: 18
+                            font.pixelSize: theme.sectionTitleSize
                             font.weight: Font.Medium
                             Layout.alignment: Qt.AlignHCenter
                         }
@@ -420,7 +433,7 @@ Page {
                                 from: -100; to: 100
                                 value: brightness
                                 Layout.fillWidth: true
-                                onValueChanged: {
+                                onMoved: {
                                     brightness = value
                                     apply("brightness", { brightness })
                                 }
@@ -440,7 +453,7 @@ Page {
                                 value: 50
                                 stepSize: 1
                                 Layout.fillWidth: true
-                                onValueChanged: {
+                                onMoved: {
                                     let contrastAmount = Math.abs(value - 50) / 2.0
                                     let increase = value >= 50
                                     contrast = contrastAmount
@@ -462,7 +475,7 @@ Page {
                                 value: hue
                                 from: -180; to: 180
                                 Layout.fillWidth: true
-                                onValueChanged: {
+                                onMoved: {
                                     hue = value
                                     apply("hue", hue)
                                 }
@@ -480,7 +493,7 @@ Page {
                                 value: saturation
                                 from: 0; to: 200
                                 Layout.fillWidth: true
-                                onValueChanged: {
+                                onMoved: {
                                     saturation = value
                                     apply("saturation", saturation)
                                 }
@@ -498,7 +511,7 @@ Page {
                                 value: sharpness
                                 from: 0; to: 10
                                 Layout.fillWidth: true
-                                onValueChanged: {
+                                onMoved: {
                                     sharpness = value
                                     apply("sharpen", sharpness)
                                 }
@@ -517,7 +530,7 @@ Page {
                                 from: 0; to: 5.0
                                 stepSize: 0.1
                                 Layout.fillWidth: true
-                                onValueChanged: {
+                                onMoved: {
                                     gamma = value
                                     apply("gamma", gamma)
                                 }
@@ -549,7 +562,7 @@ Page {
 						Label {
 							text: strings.trKey("imageEditor.effects")
 							color: theme.text
-							font.pixelSize: 18
+							font.pixelSize: theme.sectionTitleSize
 							font.weight: Font.Medium
 							Layout.alignment: Qt.AlignHCenter
 						}
@@ -565,7 +578,7 @@ Page {
 
 							// Decide layout from the *known* container width (the ColumnLayout width)
 							// 5 columns = 1 row, else 3 columns = 2 rows (5 items -> 2 rows max)
-							columns: theme.gridColumns(parent.width, 5, 96)
+							columns: theme.mobile ? 2 : theme.gridColumns(parent.width, 5, 96)
 
 							// Uniform button sizing
 							readonly property int btnW: Math.floor((parent.width - (columns - 1) * columnSpacing) / columns)
@@ -620,8 +633,8 @@ Page {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: 64
-        color: "transparent"
+        height: theme.mobile ? 56 : 64
+        color: theme.surface
 
         RowLayout {
             anchors.centerIn: parent
@@ -669,7 +682,8 @@ Page {
 
     // Force preview reload with a cache-buster
     function refreshImage() {
-        imagePreview.source = tempPath + "?" + Date.now()
+        if (editorReady)
+            imagePreview.source = tempPath + "?" + Date.now()
     }
 
     // Clean temp artifacts and leave editor
@@ -720,8 +734,10 @@ Page {
                 ok = actions[type]()
                 if (ok !== false) {
                     isDirty = true
-                    imageEditor.saveImage(tempPath)
-                    refreshImage()
+                    if (imageEditor.saveImage(tempPath))
+                        refreshImage()
+                    else
+                        toast.show(strings.trKey("imageEditor.toast.saveFailed"))
                 }
             } catch (err) {
                 console.warn("Error executing action:", type, err)

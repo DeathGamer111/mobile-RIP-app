@@ -15,6 +15,21 @@ service itself is terminated during a controller operation, the printer may
 still require controller recovery; the design prevents normal GUI closes and
 reopens from causing that state.
 
+## Temporary Android bridge
+
+Until an Android/Bionic vendor SDK is available, the Android app can reuse the
+same protocol through an ADB reverse tunnel. Start the opt-in bridge with:
+
+```bash
+./scripts/run_android_printer_bridge.sh
+```
+
+The service accepts bridge traffic only on Linux loopback port `19733`; ADB
+maps Android `127.0.0.1:19733` to it. This enables real SDK discovery, status,
+maintenance, and nozzle testing from Android without opening a printer-control
+listener on the LAN. It is a development bridge, not an Android SDK replacement
+and not proof of Android-native printer transport.
+
 ## Public C++ API
 
 The installed `PrintFlowPrinterApi` library provides:

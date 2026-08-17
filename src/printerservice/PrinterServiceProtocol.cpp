@@ -117,6 +117,12 @@ DecodeStatus takeFrame(QByteArray& buffer, QVariantMap* message,
     return DecodeStatus::Complete;
 }
 
+bool isAllowedBridgeAddress(const QHostAddress& address)
+{
+    return address == QHostAddress::LocalHost ||
+           address == QHostAddress::LocalHostIPv6;
+}
+
 QVariantMap settingsToMap(const DirectPrintSettings& settings)
 {
     return {

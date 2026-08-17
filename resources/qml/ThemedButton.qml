@@ -11,11 +11,15 @@ Button {
 	hoverEnabled: true
     clip: true
     Layout.minimumWidth: 0
-    font.pixelSize: 13
-    padding: 10
+	font.pixelSize: theme.buttonTextSize
+    leftPadding: theme.mobile ? 14 : 10
+    rightPadding: theme.mobile ? 14 : 10
+    topPadding: theme.mobile ? 8 : 10
+    bottomPadding: theme.mobile ? 8 : 10
+    implicitHeight: theme.controlHeight
 
   	background: Rectangle {
-        radius: 8
+        radius: btn.theme.controlRadius
         border.width: 1
 		border.color: btn.hovered && btn.enabled ? btn.theme.accent2 : btn.theme.divider
 
@@ -38,6 +42,8 @@ Button {
 	contentItem: Label {
         text: btn.text
 		color: btn.enabled ? btn.theme.text : btn.theme.subtext
+        font.pixelSize: btn.font.pixelSize
+        font.weight: btn.font.weight
         width: btn.availableWidth
         clip: true
         horizontalAlignment: Text.AlignHCenter

@@ -14,7 +14,7 @@ struct PrintJob {
     QString name;               // Display name
     QString imagePath;          // Path to the input image
 
-    QSize paperSize;            // Paper size in pixels (or user-defined)
+    QSize paperSize;            // Media dimensions in mm; legacy field name retained for saved-job compatibility
     double mediaHeightMm = -1.0; // Optional, in 0.1 mm increments; -1 keeps current height
     QSize resolution;           // Output resolution (DPI)
     QPoint offset;              // Position offset on page

@@ -41,6 +41,11 @@ Page {
     property var alignmentValues: ({})
     property var uvValues: ({})
     property var newUvValues: ({})
+    property string lastPrinterStatusSignature: ""
+    readonly property bool userScrolling: maintenanceScroll.contentItem
+                                          && (maintenanceScroll.contentItem.dragging
+                                              || maintenanceScroll.contentItem.flicking
+                                              || maintenanceScroll.contentItem.moving)
 
     background: Rectangle {
         color: root.theme.bg
@@ -52,40 +57,69 @@ Page {
         property string title: ""
         property string help: ""
         property bool sectionEnabled: true
+        property bool expanded: true
+        property bool helpExpanded: false
         default property alias content: body.data
 
         Layout.fillWidth: true
-        padding: 14
+        padding: section.theme.panePadding
         opacity: sectionEnabled ? 1.0 : 0.46
+        implicitHeight: sectionLayout.implicitHeight + topPadding + bottomPadding
 
         background: Rectangle {
             color: section.theme.surface
-            radius: 8
+            radius: section.theme.cardRadius
             border.width: 1
             border.color: section.theme.divider
         }
 
         ColumnLayout {
+            id: sectionLayout
             anchors.fill: parent
-            spacing: 10
+            spacing: section.theme.spaceSm
 
-            Label {
-                text: section.title
-                color: section.theme.text
-                font.pixelSize: 17
-                font.weight: Font.Medium
+            RowLayout {
                 Layout.fillWidth: true
+
+                Label {
+                    text: section.title
+                    color: section.theme.text
+                    font.pixelSize: section.theme.sectionTitleSize
+                    font.weight: Font.DemiBold
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                }
+
+                ToolButton {
+                    visible: section.help.length > 0
+                    text: "ⓘ"
+                    flat: true
+                    font.pixelSize: 16
+                    Accessible.name: section.title
+                    onClicked: section.helpExpanded = !section.helpExpanded
+                }
+
+                ToolButton {
+                    text: section.expanded ? "−" : "+"
+                    flat: true
+                    font.pixelSize: 18
+                    Accessible.name: section.title
+                    onClicked: section.expanded = !section.expanded
+                }
             }
 
             Label {
-                visible: section.help.length > 0
+                visible: section.expanded && section.help.length > 0
+                         && (!section.theme.mobile || section.helpExpanded)
                 text: section.help
                 color: section.theme.subtext
+                font.pixelSize: section.theme.bodyTextSize
                 wrapMode: Text.WordWrap
                 Layout.fillWidth: true
             }
 
             Rectangle {
+                visible: section.expanded
                 height: 1
                 color: section.theme.divider
                 opacity: 0.75
@@ -94,8 +128,9 @@ Page {
 
             ColumnLayout {
                 id: body
+                visible: section.expanded
                 Layout.fillWidth: true
-                spacing: 10
+                spacing: section.theme.spaceSm
                 enabled: section.sectionEnabled
             }
         }
@@ -146,7 +181,7 @@ Page {
 
     component ActionGrid: GridLayout {
         Layout.fillWidth: true
-        columns: root.theme.gridColumns(width, 2, 150)
+        columns: root.theme.actionColumns(width, 2, 150)
         columnSpacing: 10
         rowSpacing: 10
     }
@@ -171,30 +206,30 @@ Page {
     function printStatusText(code) {
         switch (Number(code)) {
         case 0:
-            return "Standby";
+            return strings.trKey("printerMaintenance.status.standby");
         case 1:
-            return "Printing";
+            return strings.trKey("printerMaintenance.status.printing");
         case 2:
-            return "Paused";
+            return strings.trKey("printerMaintenance.status.paused");
         case 3:
-            return "Resume";
+            return strings.trKey("printerMaintenance.status.resume");
         case 4:
-            return "Canceled";
+            return strings.trKey("printerMaintenance.status.canceled");
         case 5:
-            return "Error";
+            return strings.trKey("printerMaintenance.status.error");
         default:
-            return "Unknown";
+            return strings.trKey("printerMaintenance.status.unknown");
         }
     }
 
     function cleanStatusText(code) {
         switch (Number(code)) {
         case 0:
-            return "Standby";
+            return strings.trKey("printerMaintenance.status.standby");
         case 1:
-            return "Auto-cleaning";
+            return strings.trKey("printerMaintenance.status.autoCleaning");
         default:
-            return "Unknown";
+            return strings.trKey("printerMaintenance.status.unknown");
         }
     }
 
@@ -209,13 +244,17 @@ Page {
                 || nocaiDirectPrint.maintenanceBusy)
             return false;
         return root.runAsyncAction(
-            "Refresh Printer Status", "GetPrinterStatus", {}, false,
+            strings.trKey("printerMaintenance.action.refreshStatus"), "GetPrinterStatus", {}, false,
             function (result, ok) {
-                root.printerStatus = result || ({});
                 if (ok) {
-                    root.statusText = "Print: "
+                    const signature = String(result.printStatus) + ":" + String(result.cleanStatus);
+                    if (signature !== root.lastPrinterStatusSignature) {
+                        root.lastPrinterStatusSignature = signature;
+                        root.printerStatus = result || ({});
+                    }
+                    root.statusText = strings.trKey("printerMaintenance.status.printPrefix")
                         + root.printStatusText(result.printStatus)
-                        + " | Clean: "
+                        + strings.trKey("printerMaintenance.status.cleanInfix")
                         + root.cleanStatusText(result.cleanStatus);
                 }
             }, !silent, !silent);
@@ -224,12 +263,13 @@ Page {
     function runAsyncAction(label, action, arguments, pollAfter, completion,
                             showOverlay, showToast) {
         if (!root.maintenanceSupported) {
-            root.statusText = "Maintenance is not supported for " + appState.selectedPrinter + ".";
+            root.statusText = strings.trKey("printerMaintenance.toast.unsupportedPrefix")
+                              + appState.selectedPrinter + ".";
             toast.show(root.statusText);
             return false;
         }
         if (nocaiDirectPrint.maintenanceBusy) {
-            root.statusText = "Another printer maintenance operation is still running.";
+            root.statusText = strings.trKey("printerMaintenance.toast.busy");
             toast.show(root.statusText);
             return false;
         }
@@ -241,7 +281,8 @@ Page {
             ? true : Boolean(showToast);
         root.pendingMaintenanceCompletion = completion;
         if (!nocaiDirectPrint.startMaintenanceAction(action, arguments || ({}))) {
-            root.statusText = label + " could not start: " + nocaiDirectPrint.lastError;
+            root.statusText = label + strings.trKey("printerMaintenance.toast.couldNotStart")
+                              + nocaiDirectPrint.lastError;
             root.pendingMaintenanceLabel = "";
             root.pendingMaintenancePollAfter = false;
             root.pendingMaintenanceShowOverlay = false;
@@ -250,7 +291,7 @@ Page {
             toast.show(root.statusText);
             return false;
         }
-        root.statusText = label + " is running…";
+        root.statusText = label + strings.trKey("printerMaintenance.toast.runningSuffix");
         return true;
     }
 
@@ -312,15 +353,17 @@ Page {
         }
 
         const axis = root.activeMotionAxis;
-        const label = axis === 0 ? "Stop Head Motion"
-                    : (axis === 1 ? "Stop Bed Motion" : "Stop Height Motion");
+        const label = axis === 0 ? strings.trKey("printerMaintenance.action.stopHeadMotion")
+                    : (axis === 1 ? strings.trKey("printerMaintenance.action.stopBedMotion")
+                                  : strings.trKey("printerMaintenance.action.stopHeightMotion"));
         root.axisStopRequested = false;
         return root.runAsyncAction(
             label, "StopAxis", {"axis": axis}, true,
             function (result, ok) {
                 root.clearAxisMotionState();
                 if (ok && axis === 2)
-                    root.statusText = label + " at " + result.position + " mm.";
+                    root.statusText = label + strings.trKey("printerMaintenance.status.atPosition")
+                                      + result.position + " mm.";
             }, false, false);
     }
 
@@ -330,7 +373,8 @@ Page {
             label, "StopAxis", {"axis": axis}, true,
             function (result, ok) {
                 if (ok)
-                    root.statusText = label + " at " + result.position + " mm.";
+                    root.statusText = label + strings.trKey("printerMaintenance.status.atPosition")
+                                      + result.position + " mm.";
             });
     }
 
@@ -343,11 +387,12 @@ Page {
 
         const axis = root.axisMotionActive ? root.activeMotionAxis : 0;
         return root.runAsyncAction(
-            "Stop and Home Head", "StopAndHomeHead", {"axis": axis}, true,
+            strings.trKey("printerMaintenance.action.stopAndHomeHead"),
+            "StopAndHomeHead", {"axis": axis}, true,
             function (result, ok) {
                 root.clearAxisMotionState();
                 if (ok)
-                    root.statusText = "Motion stopped and the print head was sent to its capped home position.";
+                    root.statusText = strings.trKey("printerMaintenance.status.motionStoppedHome");
             });
     }
 
@@ -363,26 +408,27 @@ Page {
 
     function maintenanceProgressText() {
         switch (root.pendingMaintenanceLabel) {
-        case "Refresh Printer Status": return "Refreshing Printer Status…";
-        case "ConnectPrinter": return "Connecting to Printer…";
-        case "PrintNozzleCheck": return "Printing Nozzle Check…";
-        case "StartCleanOperation": return "Cleaning Print Heads…";
-        case "WipePrintHead": return "Wiping Print Heads…";
-        case "Start Manual Cleaning": return "Starting Manual Cleaning…";
-        case "Stop Manual Cleaning": return "Stopping Manual Cleaning…";
-        case "Start Flushing": return "Starting Flushing…";
-        case "Stop Flushing": return "Stopping Flushing…";
-        case "CapPrintHead": return "Capping Print Head…";
-        case "SetPrintHeight": return "Moving to Print Height…";
-        case "GetPrintHeight": return "Reading Print Height…";
+        case strings.trKey("printerMaintenance.action.refreshStatus"): return strings.trKey("printerMaintenance.progress.refreshingStatus");
+        case strings.trKey("printerMaintenance.action.connect"): return strings.trKey("printerMaintenance.progress.connecting");
+        case strings.trKey("printerMaintenance.action.nozzleCheck"): return strings.trKey("printerMaintenance.progress.nozzleCheck");
+        case strings.trKey("printerMaintenance.action.autoClean"): return strings.trKey("printerMaintenance.progress.cleaningHeads");
+        case strings.trKey("printerMaintenance.action.wipeHeads"): return strings.trKey("printerMaintenance.progress.wipingHeads");
+        case strings.trKey("printerMaintenance.action.startManualClean"): return strings.trKey("printerMaintenance.progress.startManualClean");
+        case strings.trKey("printerMaintenance.action.stopManualClean"): return strings.trKey("printerMaintenance.progress.stopManualClean");
+        case strings.trKey("printerMaintenance.action.startFlushing"): return strings.trKey("printerMaintenance.progress.startFlushing");
+        case strings.trKey("printerMaintenance.action.stopFlushing"): return strings.trKey("printerMaintenance.progress.stopFlushing");
+        case strings.trKey("printerMaintenance.action.capHead"): return strings.trKey("printerMaintenance.progress.cappingHead");
+        case strings.trKey("printerMaintenance.action.setHeight"): return strings.trKey("printerMaintenance.progress.movingHeight");
+        case strings.trKey("printerMaintenance.action.getHeight"): return strings.trKey("printerMaintenance.progress.readingHeight");
         }
         return root.pendingMaintenanceLabel.length > 0
             ? root.pendingMaintenanceLabel + "…"
-            : "Working with Printer…";
+            : strings.trKey("printerMaintenance.progress.working");
     }
 
     function refreshJobSettings() {
-        runAsyncAction("GetJobSettings", "GetJobSettings", {}, false,
+        runAsyncAction(strings.trKey("printerMaintenance.action.readJobSettings"),
+            "GetJobSettings", {}, false,
             function (result, ok) {
                 if (ok)
                     root.jobSettings = result;
@@ -390,7 +436,8 @@ Page {
     }
 
     function refreshAlignment() {
-        runAsyncAction("GetAlignmentValues", "GetAlignmentValues", {}, false,
+        runAsyncAction(strings.trKey("printerMaintenance.action.readAlignment"),
+            "GetAlignmentValues", {}, false,
             function (result, ok) {
                 if (ok)
                     root.alignmentValues = result;
@@ -398,7 +445,8 @@ Page {
     }
 
     function refreshUv() {
-        runAsyncAction("GetUVParamValues", "GetUVParamValues", {}, false,
+        runAsyncAction(strings.trKey("printerMaintenance.action.readUv"),
+            "GetUVParamValues", {}, false,
             function (result, ok) {
                 if (ok)
                     root.uvValues = result;
@@ -406,7 +454,8 @@ Page {
     }
 
     function refreshNewUv() {
-        runAsyncAction("GetNewUVParamValues", "GetNewUVParamValues", {}, false,
+        runAsyncAction(strings.trKey("printerMaintenance.action.readNewUv"),
+            "GetNewUVParamValues", {}, false,
             function (result, ok) {
                 if (ok)
                     root.newUvValues = result;
@@ -419,8 +468,8 @@ Page {
             const label = root.pendingMaintenanceLabel.length > 0
                 ? root.pendingMaintenanceLabel : action;
             root.statusText = succeeded
-                ? label + " succeeded."
-                : label + " failed: " + errorMessage;
+                ? label + strings.trKey("printerMaintenance.toast.succeededSuffix")
+                : label + strings.trKey("printerMaintenance.toast.failedSuffix") + errorMessage;
             const completion = root.pendingMaintenanceCompletion;
             const pollAfter = root.pendingMaintenancePollAfter;
             const showToast = root.pendingMaintenanceShowToast;
@@ -443,10 +492,10 @@ Page {
 
     Timer {
         id: statusPoller
-        interval: 1500
+        interval: 5000
         repeat: true
         running: root.visible && root.controlsEnabled && root.statusPollingEnabled
-                 && !root.axisMotionActive
+                 && !root.axisMotionActive && !root.userScrolling
         onTriggered: root.updateStatus(true)
     }
 
@@ -459,7 +508,7 @@ Page {
                 return;
             root.axisMotionHeld = false;
             root.axisHomeRequested = true;
-            toast.show("Motion safety timeout reached. Stopping motion and homing the print head.");
+            toast.show(strings.trKey("printerMaintenance.toast.motionTimeout"));
             root.stopAndHomeHead();
         }
     }
@@ -470,7 +519,8 @@ Page {
     }
 
     header: Rectangle {
-        height: 60
+        id: maintenanceHeader
+        height: root.theme.appBarHeight
         color: root.theme.surface
 
         RowLayout {
@@ -479,17 +529,17 @@ Page {
             spacing: 10
 
             ThemedButton {
-                text: "Back"
+                text: strings.trKey("common.back")
                 theme: root.theme
                 Layout.preferredWidth: root.theme.headerButtonWidth(root.width)
-                Layout.preferredHeight: 40
+                Layout.preferredHeight: root.theme.compactControlHeight
                 enabled: !root.axisMotionActive
                          && !nocaiDirectPrint.maintenanceBusy
                 onClicked: root.goBack()
             }
 
             Label {
-                text: "Printer Maintenance"
+                text: strings.trKey("printerMaintenance.title")
                 color: root.theme.text
                 font.pixelSize: root.theme.headerTitleSize(root.width)
                 font.weight: Font.Medium
@@ -500,13 +550,13 @@ Page {
             }
 
             ThemedButton {
-                text: "Connect"
+                text: strings.trKey("common.connect")
                 theme: root.theme
                 Layout.preferredWidth: root.theme.headerButtonWidth(root.width)
-                Layout.preferredHeight: 40
+                Layout.preferredHeight: root.theme.compactControlHeight
                 enabled: root.maintenanceSupported && !nocaiDirectPrint.maintenanceBusy
                 onClicked: root.runAsyncAction(
-                    "ConnectPrinter", "ConnectPrinter",
+                    strings.trKey("printerMaintenance.action.connect"), "ConnectPrinter",
                     {"printerIndex": root.appState.sdkSelectedPrinterIndex}, true,
                     function (result, ok) {
                         root.statusPollingEnabled = ok;
@@ -516,8 +566,10 @@ Page {
     }
 
     ScrollView {
+        id: maintenanceScroll
         anchors.fill: parent
         contentWidth: availableWidth
+        clip: true
 
         ColumnLayout {
             width: root.theme.boundedWidth(parent.width, 520)
@@ -526,14 +578,16 @@ Page {
             anchors.margins: root.theme.pageMargin
 
             Section {
-                title: "Status"
+                title: strings.trKey("printerMaintenance.section.status")
                 theme: root.theme
                 sectionEnabled: root.maintenanceSupported
-                help: "The SDK recommends polling printer status slower than once per second. This page refreshes print and cleaning status every 1.5 seconds while maintenance is available."
+                help: strings.trKey("printerMaintenance.section.status.help")
+                expanded: true
 
                 Label {
                     Layout.fillWidth: true
-                    text: root.maintenanceSupported ? root.statusText : "Maintenance is unavailable for the selected printer. Select a supported printer type in Printer Setup first."
+                    text: root.maintenanceSupported ? root.statusText
+                                                    : strings.trKey("printerMaintenance.unavailable")
                     color: root.maintenanceSupported ? root.theme.subtext : root.theme.warning
                     wrapMode: Text.WordWrap
                 }
@@ -545,18 +599,20 @@ Page {
                     Label {
                         Layout.fillWidth: true
                         color: root.theme.text
-                        text: "Print: " + root.printStatusText(root.readMapValue(root.printerStatus, "printStatus", -1))
+                        text: strings.trKey("printerMaintenance.status.printPrefix")
+                              + root.printStatusText(root.readMapValue(root.printerStatus, "printStatus", -1))
                     }
 
                     Label {
                         Layout.fillWidth: true
                         color: root.theme.text
-                        text: "Clean: " + root.cleanStatusText(root.readMapValue(root.printerStatus, "cleanStatus", -1))
+                        text: strings.trKey("printerMaintenance.status.cleanPrefix")
+                              + root.cleanStatusText(root.readMapValue(root.printerStatus, "cleanStatus", -1))
                     }
                 }
 
                 ActionButton {
-                    text: "Refresh Status"
+                    text: strings.trKey("printerMaintenance.action.refreshStatus")
                     onClicked: {
                         root.statusPollingEnabled = true;
                         root.updateStatus(false);
@@ -565,10 +621,11 @@ Page {
             }
 
             Section {
-                title: "Head Maintenance"
+                title: strings.trKey("printerMaintenance.section.headMaintenance")
                 theme: root.theme
                 sectionEnabled: root.controlsEnabled
-                help: "Head mask is a bitmask: bit 0 selects head 1 and bit 1 selects head 2, so 3 selects both X-33 heads. Nozzle Check prints the SDK's diagnostic pattern. Automatic Head Cleaning runs the printer's automatic cleaning cycle. Manual Cleaning runs the pump for the selected heads until stopped. Flushing rapidly fires the selected nozzles at the maintenance station to keep them wet or clear light drying; stop either operation when the desired cleaning is complete."
+                help: strings.trKey("printerMaintenance.section.headMaintenance.help")
+                expanded: true
 
                 GridLayout {
                     Layout.fillWidth: true
@@ -577,7 +634,7 @@ Page {
                     rowSpacing: 8
 
                     FieldLabel {
-                        text: "Head Mask"
+                        text: strings.trKey("printerMaintenance.headMask")
                         theme: root.theme
                     }
                     SpinBox {
@@ -592,68 +649,69 @@ Page {
 
                 ActionGrid {
                     ActionButton {
-                        text: "Print Nozzle Check"
+                        text: strings.trKey("printerMaintenance.action.nozzleCheck")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "PrintNozzleCheck", "PrintNozzleCheck", {}, true, null)
+                            strings.trKey("printerMaintenance.action.nozzleCheck"), "PrintNozzleCheck", {}, true, null)
                     }
                     ActionButton {
-                        text: "Automatic Head Cleaning"
+                        text: strings.trKey("printerMaintenance.action.autoClean")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "StartCleanOperation", "StartCleanOperation",
+                            strings.trKey("printerMaintenance.action.autoClean"), "StartCleanOperation",
                             {"headMask": root.headMask}, true, null)
                     }
                     ActionButton {
-                        text: "Wipe Heads"
+                        text: strings.trKey("printerMaintenance.action.wipeHeads")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "WipePrintHead", "WipePrintHead",
+                            strings.trKey("printerMaintenance.action.wipeHeads"), "WipePrintHead",
                             {"headMask": root.headMask}, true, null)
                     }
                     ActionButton {
-                        text: "Cap Head"
+                        text: strings.trKey("printerMaintenance.action.capHead")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "CapPrintHead", "CapPrintHead", {}, true, null)
+                            strings.trKey("printerMaintenance.action.capHead"), "CapPrintHead", {}, true, null)
                     }
                     ActionButton {
-                        text: "Start Manual Cleaning"
+                        text: strings.trKey("printerMaintenance.action.startManualClean")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "Start Manual Cleaning", "StartPump",
+                            strings.trKey("printerMaintenance.action.startManualClean"), "StartPump",
                             {"headMask": root.headMask}, true, null)
                     }
                     ActionButton {
-                        text: "Stop Manual Cleaning"
+                        text: strings.trKey("printerMaintenance.action.stopManualClean")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "Stop Manual Cleaning", "StopPumpOperation", {}, true, null)
+                            strings.trKey("printerMaintenance.action.stopManualClean"), "StopPumpOperation", {}, true, null)
                     }
                     ActionButton {
-                        text: "Start Flushing"
+                        text: strings.trKey("printerMaintenance.action.startFlushing")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "Start Flushing", "StartFlashSpray",
+                            strings.trKey("printerMaintenance.action.startFlushing"), "StartFlashSpray",
                             {"headMask": root.headMask}, true, null)
                     }
                     ActionButton {
-                        text: "Stop Flushing"
+                        text: strings.trKey("printerMaintenance.action.stopFlushing")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "Stop Flushing", "StopFlashSpray", {}, true, null)
+                            strings.trKey("printerMaintenance.action.stopFlushing"), "StopFlashSpray", {}, true, null)
                     }
                 }
             }
 
             Section {
-                title: "Motion And Height"
+                title: strings.trKey("printerMaintenance.section.motionHeight")
                 theme: root.theme
                 sectionEnabled: root.controlsEnabled
-                help: "Press and hold an arrow to move; releasing it stops that axis. Stop & Home immediately stops the active axis and sends the print head to its capped home position. A 30-second safety timeout prevents unattended motion. Print height is in millimeters and accepts two decimal places."
+                help: strings.trKey("printerMaintenance.section.motionHeight.help")
+                expanded: !root.theme.mobile
 
                 Label {
-                    text: "Head and Bed Motion"
+                    text: strings.trKey("printerMaintenance.headBedMotion")
                     color: root.theme.text
                     font.weight: Font.Medium
                     Layout.fillWidth: true
@@ -671,11 +729,11 @@ Page {
                         Layout.preferredWidth: 1
                     }
                     MotionButton {
-                        text: "↑ Back"
-                        Accessible.name: "Move bed back"
+                        text: strings.trKey("printerMaintenance.motion.back")
+                        Accessible.name: strings.trKey("printerMaintenance.motion.moveBedBack")
                         motionAxis: 1
                         motionDirection: 1
-                        motionLabel: "Move Bed Back"
+                        motionLabel: strings.trKey("printerMaintenance.motion.moveBedBack")
                     }
                     Item {
                         Layout.fillWidth: true
@@ -683,16 +741,16 @@ Page {
                     }
 
                     MotionButton {
-                        text: "← Head"
-                        Accessible.name: "Move print head left"
+                        text: strings.trKey("printerMaintenance.motion.headLeft")
+                        Accessible.name: strings.trKey("printerMaintenance.motion.moveHeadLeft")
                         motionAxis: 0
                         motionDirection: 0
-                        motionLabel: "Move Head Left"
+                        motionLabel: strings.trKey("printerMaintenance.motion.moveHeadLeft")
                     }
                     ThemedButton {
-                        text: "■ Stop & Home"
+                        text: strings.trKey("printerMaintenance.motion.stopHome")
                         theme: root.theme
-                        Accessible.name: "Stop motion and home the print head"
+                        Accessible.name: strings.trKey("printerMaintenance.motion.stopHomeAccessible")
                         enabled: root.controlsEnabled
                                  && (!nocaiDirectPrint.maintenanceBusy
                                      || root.axisMotionActive)
@@ -705,11 +763,11 @@ Page {
                         onClicked: root.stopAndHomeHead()
                     }
                     MotionButton {
-                        text: "Head →"
-                        Accessible.name: "Move print head right"
+                        text: strings.trKey("printerMaintenance.motion.headRight")
+                        Accessible.name: strings.trKey("printerMaintenance.motion.moveHeadRight")
                         motionAxis: 0
                         motionDirection: 1
-                        motionLabel: "Move Head Right"
+                        motionLabel: strings.trKey("printerMaintenance.motion.moveHeadRight")
                     }
 
                     Item {
@@ -717,11 +775,11 @@ Page {
                         Layout.preferredWidth: 1
                     }
                     MotionButton {
-                        text: "↓ Forward"
-                        Accessible.name: "Move bed forward"
+                        text: strings.trKey("printerMaintenance.motion.forward")
+                        Accessible.name: strings.trKey("printerMaintenance.motion.moveBedForward")
                         motionAxis: 1
                         motionDirection: 0
-                        motionLabel: "Move Bed Forward"
+                        motionLabel: strings.trKey("printerMaintenance.motion.moveBedForward")
                     }
                     Item {
                         Layout.fillWidth: true
@@ -731,12 +789,12 @@ Page {
 
                 ActionGrid {
                     ActionButton {
-                        text: "Save Head Position"
-                        onClicked: root.savePrinterAxis(0, "Saved Head Position")
+                        text: strings.trKey("printerMaintenance.action.saveHeadPosition")
+                        onClicked: root.savePrinterAxis(0, strings.trKey("printerMaintenance.status.savedHeadPosition"))
                     }
                     ActionButton {
-                        text: "Save Bed Position"
-                        onClicked: root.savePrinterAxis(1, "Saved Bed Position")
+                        text: strings.trKey("printerMaintenance.action.saveBedPosition")
+                        onClicked: root.savePrinterAxis(1, strings.trKey("printerMaintenance.status.savedBedPosition"))
                     }
                 }
 
@@ -753,7 +811,7 @@ Page {
                     rowSpacing: 8
 
                     FieldLabel {
-                        text: "Print Height mm"
+                        text: strings.trKey("printerMaintenance.printHeightMm")
                         theme: root.theme
                     }
                     SpinBox {
@@ -794,74 +852,81 @@ Page {
 
                 ActionGrid {
                     ActionButton {
-                        text: "Set Height"
+                        text: strings.trKey("printerMaintenance.action.setHeight")
                         theme: root.theme
                         onClicked: {
                             root.activeMotionAxis = 2;
                             root.runAsyncAction(
-                                "SetPrintHeight", "SetPrintHeight",
+                                strings.trKey("printerMaintenance.action.setHeight"), "SetPrintHeight",
                                 {"heightMm": root.printHeight}, true, null);
                         }
                     }
                     ActionButton {
-                        text: "Get Height"
+                        text: strings.trKey("printerMaintenance.action.getHeight")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "GetPrintHeight", "GetPrintHeight", {}, false,
+                            strings.trKey("printerMaintenance.action.getHeight"), "GetPrintHeight", {}, false,
                             function (result, ok) {
                                 if (ok) {
                                     root.printHeight = result.heightMm;
-                                    root.statusText = "Print height: " + result.heightMm + " mm";
+                                    root.statusText = strings.trKey("printerMaintenance.status.printHeight")
+                                                      + result.heightMm + " mm";
                                 }
                             })
                     }
                     ActionButton {
-                        text: "Stop Height"
-                        onClicked: root.stopPrinterAxis(2, "Stop Height Motion")
+                        text: strings.trKey("printerMaintenance.action.stopHeight")
+                        onClicked: root.stopPrinterAxis(2, strings.trKey("printerMaintenance.action.stopHeightMotion"))
                     }
                     ActionButton {
-                        text: "Save Height Position"
-                        onClicked: root.savePrinterAxis(2, "Saved Height Position")
+                        text: strings.trKey("printerMaintenance.action.saveHeightPosition")
+                        onClicked: root.savePrinterAxis(2, strings.trKey("printerMaintenance.status.savedHeightPosition"))
                     }
                 }
             }
 
             Section {
-                title: "Settings And Config"
+                title: strings.trKey("printerMaintenance.section.settingsConfig")
                 theme: root.theme
                 sectionEnabled: root.controlsEnabled
-                help: "Read the engine's current job settings before applying changes. Import/export uses the vendor PFG configuration file format."
+                help: strings.trKey("printerMaintenance.section.settingsConfig.help")
+                expanded: !root.theme.mobile
 
                 ActionGrid {
                     ActionButton {
-                        text: "Read Job Settings"
+                        text: strings.trKey("printerMaintenance.action.readJobSettings")
                         theme: root.theme
                         onClicked: root.refreshJobSettings()
                     }
                     ActionButton {
-                        text: "Apply Read Settings"
+                        text: strings.trKey("printerMaintenance.action.applyReadSettings")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "SetJobSettings", "SetJobSettings",
+                            strings.trKey("printerMaintenance.action.applyReadSettings"), "SetJobSettings",
                             {"settings": root.jobSettings}, true, null)
                     }
                 }
 
                 Label {
                     Layout.fillWidth: true
-                    text: "Direction " + root.readMapValue(root.jobSettings, "printDirection", "-") + " | Speed " + root.readMapValue(root.jobSettings, "printSpeed", "-") + " | Head Voltage " + root.readMapValue(root.jobSettings, "headVoltage", "-")
+                    text: strings.trKey("printerMaintenance.settings.direction")
+                          + root.readMapValue(root.jobSettings, "printDirection", "-")
+                          + strings.trKey("printerMaintenance.settings.speed")
+                          + root.readMapValue(root.jobSettings, "printSpeed", "-")
+                          + strings.trKey("printerMaintenance.settings.headVoltage")
+                          + root.readMapValue(root.jobSettings, "headVoltage", "-")
                     color: root.theme.subtext
                     wrapMode: Text.WordWrap
                 }
 
                 ActionGrid {
                     ActionButton {
-                        text: "Export Config"
+                        text: strings.trKey("printerMaintenance.action.exportConfig")
                         theme: root.theme
                         onClicked: exportConfigDialog.open()
                     }
                     ActionButton {
-                        text: "Import Config"
+                        text: strings.trKey("printerMaintenance.action.importConfig")
                         theme: root.theme
                         onClicked: importConfigDialog.open()
                     }
@@ -869,10 +934,11 @@ Page {
             }
 
             Section {
-                title: "Alignment"
+                title: strings.trKey("printerMaintenance.section.alignment")
                 theme: root.theme
                 sectionEnabled: root.controlsEnabled
-                help: "Value type selects which alignment field to write. Pattern type selects a printer-generated calibration chart. Use the dedicated Head Maintenance button for the common nozzle check; this section exposes all pattern types for advanced alignment work."
+                help: strings.trKey("printerMaintenance.section.alignment.help")
+                expanded: !root.theme.mobile
 
                 GridLayout {
                     Layout.fillWidth: true
@@ -881,7 +947,7 @@ Page {
                     rowSpacing: 8
 
                     FieldLabel {
-                        text: "Value Type"
+                        text: strings.trKey("printerMaintenance.valueType")
                         theme: root.theme
                     }
                     SpinBox {
@@ -892,7 +958,7 @@ Page {
                         onValueModified: root.alignmentType = value
                     }
                     FieldLabel {
-                        text: "Pattern Type"
+                        text: strings.trKey("printerMaintenance.patternType")
                         theme: root.theme
                     }
                     SpinBox {
@@ -906,41 +972,45 @@ Page {
 
                 ActionGrid {
                     ActionButton {
-                        text: "Read Alignment"
+                        text: strings.trKey("printerMaintenance.action.readAlignment")
                         theme: root.theme
                         onClicked: root.refreshAlignment()
                     }
                     ActionButton {
-                        text: "Apply Alignment"
+                        text: strings.trKey("printerMaintenance.action.applyAlignment")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "SetAlignmentValues", "SetAlignmentValues",
+                            strings.trKey("printerMaintenance.action.applyAlignment"), "SetAlignmentValues",
                             {"settings": root.alignmentValues, "type": root.alignmentType},
                             true, null)
                     }
                 }
 
                 ActionButton {
-                    text: "Print Alignment Pattern"
+                    text: strings.trKey("printerMaintenance.action.printAlignmentPattern")
                     theme: root.theme
                     onClicked: root.runAsyncAction(
-                        "PrintAlignmentPattern", "PrintAlignmentPattern",
+                        strings.trKey("printerMaintenance.action.printAlignmentPattern"), "PrintAlignmentPattern",
                         {"type": root.alignmentPatternType}, true, null)
                 }
 
                 Label {
                     Layout.fillWidth: true
-                    text: "Step " + root.readMapValue(root.alignmentValues, "stepValue", "-") + " | Bidi " + root.readMapValue(root.alignmentValues, "bidiValue", "-")
+                    text: strings.trKey("printerMaintenance.alignment.step")
+                          + root.readMapValue(root.alignmentValues, "stepValue", "-")
+                          + strings.trKey("printerMaintenance.alignment.bidi")
+                          + root.readMapValue(root.alignmentValues, "bidiValue", "-")
                     color: root.theme.subtext
                     wrapMode: Text.WordWrap
                 }
             }
 
             Section {
-                title: "XY And UV"
+                title: strings.trKey("printerMaintenance.section.xyUv")
                 theme: root.theme
                 sectionEnabled: root.controlsEnabled
-                help: "XY offsets are in millimeters. UV value types map to the right/left lamp directional offsets documented by the SDK. New UV controls are only active on firmware that reports support."
+                help: strings.trKey("printerMaintenance.section.xyUv.help")
+                expanded: !root.theme.mobile
 
                 GridLayout {
                     Layout.fillWidth: true
@@ -949,7 +1019,7 @@ Page {
                     rowSpacing: 8
 
                     FieldLabel {
-                        text: "X Offset mm"
+                        text: strings.trKey("printerMaintenance.xOffsetMm")
                         theme: root.theme
                     }
                     SpinBox {
@@ -960,7 +1030,7 @@ Page {
                         onValueModified: root.printX = value
                     }
                     FieldLabel {
-                        text: "Y Offset mm"
+                        text: strings.trKey("printerMaintenance.yOffsetMm")
                         theme: root.theme
                     }
                     SpinBox {
@@ -971,7 +1041,7 @@ Page {
                         onValueModified: root.printY = value
                     }
                     FieldLabel {
-                        text: "UV Value Type"
+                        text: strings.trKey("printerMaintenance.uvValueType")
                         theme: root.theme
                     }
                     SpinBox {
@@ -982,7 +1052,7 @@ Page {
                         onValueModified: root.uvType = value
                     }
                     FieldLabel {
-                        text: "New UV Value Type"
+                        text: strings.trKey("printerMaintenance.newUvValueType")
                         theme: root.theme
                     }
                     SpinBox {
@@ -993,7 +1063,7 @@ Page {
                         onValueModified: root.newUvType = value
                     }
                     FieldLabel {
-                        text: "New UV Function"
+                        text: strings.trKey("printerMaintenance.newUvFunction")
                         theme: root.theme
                     }
                     SpinBox {
@@ -1007,64 +1077,65 @@ Page {
 
                 ActionGrid {
                     ActionButton {
-                        text: "Set XY"
+                        text: strings.trKey("printerMaintenance.action.setXy")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "SetPrintXYValue", "SetPrintXYValue",
+                            strings.trKey("printerMaintenance.action.setXy"), "SetPrintXYValue",
                             {"xMm": root.printX, "yMm": root.printY}, true, null)
                     }
                     ActionButton {
-                        text: "Get XY"
+                        text: strings.trKey("printerMaintenance.action.getXy")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "GetPrintXYValue", "GetPrintXYValue", {}, false,
+                            strings.trKey("printerMaintenance.action.getXy"), "GetPrintXYValue", {}, false,
                             function (result, ok) {
                                 if (ok) {
                                     root.printX = result.xMm;
                                     root.printY = result.yMm;
-                                    root.statusText = "XY: " + result.xMm + ", " + result.yMm + " mm";
+                                    root.statusText = strings.trKey("printerMaintenance.status.xy")
+                                                      + result.xMm + ", " + result.yMm + " mm";
                                 }
                             })
                     }
                     ActionButton {
-                        text: "Read UV"
+                        text: strings.trKey("printerMaintenance.action.readUv")
                         theme: root.theme
                         onClicked: root.refreshUv()
                     }
                     ActionButton {
-                        text: "Apply UV"
+                        text: strings.trKey("printerMaintenance.action.applyUv")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "SetUVParamValues", "SetUVParamValues",
+                            strings.trKey("printerMaintenance.action.applyUv"), "SetUVParamValues",
                             {"settings": root.uvValues, "type": root.uvType}, true, null)
                     }
                     ActionButton {
-                        text: "New UV Support"
+                        text: strings.trKey("printerMaintenance.action.newUvSupport")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "GetSupportNewUVParamFunction", "GetSupportNewUVParamFunction",
+                            strings.trKey("printerMaintenance.action.newUvSupport"), "GetSupportNewUVParamFunction",
                             {}, false, function (result, ok) {
                                 if (ok)
-                                    root.statusText = "New UV support: " + result;
+                                    root.statusText = strings.trKey("printerMaintenance.status.newUvSupport") + result;
                             })
                     }
                     ActionButton {
-                        text: "Run New UV Function"
+                        text: strings.trKey("printerMaintenance.action.runNewUv")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "SetNewUVParamFunction", "SetNewUVParamFunction",
+                            strings.trKey("printerMaintenance.action.runNewUv"), "SetNewUVParamFunction",
                             {"type": root.newUvFunctionType}, true, null)
                     }
                     ActionButton {
-                        text: "Read New UV"
+                        text: strings.trKey("printerMaintenance.action.readNewUv")
                         theme: root.theme
                         onClicked: root.refreshNewUv()
                     }
                     ActionButton {
-                        text: "Apply New UV"
+                        text: strings.trKey("printerMaintenance.action.applyNewUv")
                         theme: root.theme
                         onClicked: root.runAsyncAction(
-                            "SetNewUVParamValues", "SetNewUVParamValues",
+                            strings.trKey("printerMaintenance.action.applyNewUv"), "SetNewUVParamValues",
                             {"settings": root.newUvValues, "type": root.newUvType},
                             true, null)
                     }
@@ -1131,21 +1202,21 @@ Page {
 
     P.FileDialog {
         id: exportConfigDialog
-        title: "Export Nocai Config"
+        title: strings.trKey("printerMaintenance.exportConfig.title")
         fileMode: P.FileDialog.SaveFile
         defaultSuffix: "pfg"
         nameFilters: ["Printer Config (*.pfg)", "All Files (*)"]
         onAccepted: root.runAsyncAction(
-            "ExportConfigFile", "ExportConfigFile", {"path": file}, true, null)
+            strings.trKey("printerMaintenance.action.exportConfig"), "ExportConfigFile", {"path": file}, true, null)
     }
 
     P.FileDialog {
         id: importConfigDialog
-        title: "Import Nocai Config"
+        title: strings.trKey("printerMaintenance.importConfig.title")
         fileMode: P.FileDialog.OpenFile
         nameFilters: ["Printer Config (*.pfg)", "All Files (*)"]
         onAccepted: root.runAsyncAction(
-            "ImportConfigFile", "ImportConfigFile", {"path": file}, true, null)
+            strings.trKey("printerMaintenance.action.importConfig"), "ImportConfigFile", {"path": file}, true, null)
     }
 
     Toast {

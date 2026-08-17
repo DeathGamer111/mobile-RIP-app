@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(CTest)
 
 option(RIP_ANDROID_ENABLE_RIP_PROCESSING "Build Android with the native RIP dependency stack instead of boot-safe stubs." OFF)
+option(RIP_ANDROID_PRINTER_BRIDGE "Use the temporary ADB printer-service bridge on Android." ON)
 option(RIP_EMBED_BLUE_NOISE_MASKS "Embed local blue-noise TIFF masks into the Qt resource bundle." OFF)
 set(RIP_THEME "default" CACHE STRING "Built-in theme id to embed as the selected theme: default, nocai, or xante.")
 set(RIP_THEME_FILE "" CACHE FILEPATH "Optional custom theme JSON file to embed instead of a built-in selected theme.")
@@ -43,7 +44,15 @@ set(PRINTFLOW_DIRECT_PRINT_BACKEND_SOURCES
     src/vendor/nocai/NocaiPrnWriter.h src/vendor/nocai/NocaiPrnWriter.cpp
 )
 
-if(ANDROID)
+if(ANDROID AND RIP_ANDROID_PRINTER_BRIDGE)
+    list(APPEND RIP_CORE_SOURCES
+        src/printerservice/PrintFlowPrinterApiExport.h
+        src/printerservice/PrinterServiceProtocol.h
+        src/printerservice/PrinterServiceProtocol.cpp
+        src/printerservice/PrinterServiceClient.h
+        src/printerservice/PrinterServiceClient.cpp
+    )
+elseif(ANDROID)
     list(APPEND RIP_CORE_SOURCES ${PRINTFLOW_DIRECT_PRINT_BACKEND_SOURCES})
 endif()
 
@@ -72,6 +81,8 @@ set(RIP_ANDROID_STUB_SOURCES
 
 if(ANDROID AND NOT RIP_ANDROID_ENABLE_RIP_PROCESSING)
     set(RIP_PROCESSING_SOURCES ${RIP_ANDROID_STUB_SOURCES})
+elseif(ANDROID)
+    set(RIP_PROCESSING_SOURCES ${RIP_NATIVE_SOURCES})
 else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(ImageMagick REQUIRED IMPORTED_TARGET Magick++)
@@ -181,7 +192,7 @@ if(NOT ANDROID)
     endif()
 endif()
 
-if(NOT ANDROID OR RIP_ANDROID_ENABLE_RIP_PROCESSING)
+if(NOT ANDROID)
     target_link_libraries(PrintFlow
         PRIVATE
             PkgConfig::ImageMagick
@@ -190,7 +201,13 @@ if(NOT ANDROID OR RIP_ANDROID_ENABLE_RIP_PROCESSING)
 endif()
 
 if(ANDROID AND RIP_ANDROID_ENABLE_RIP_PROCESSING)
+    include(cmake/AndroidImageMagick.cmake)
+    printflow_configure_android_imagemagick(PrintFlow)
     target_compile_definitions(PrintFlow PRIVATE RIP_ANDROID_ENABLE_RIP_PROCESSING=1)
+endif()
+
+if(ANDROID AND RIP_ANDROID_PRINTER_BRIDGE)
+    target_compile_definitions(PrintFlow PRIVATE RIP_ANDROID_PRINTER_BRIDGE=1)
 endif()
 
 set(RIP_BUILTIN_THEMES default nocai xante)
@@ -303,7 +320,7 @@ if(RIP_EMBED_BLUE_NOISE_MASKS)
     )
 
     if(RIP_BLUE_NOISE_MASKS)
-        list(APPEND RIP_ASSET_FILES ${RIP_BLUE_NOISE_MASKS})
+        message(STATUS "Blue-noise masks will be packaged as a separate big resource.")
     else()
         message(WARNING "Blue-noise mask TIFFs were not found under resources/assets/blue_noise_mask_512_12000.")
     endif()
@@ -320,6 +337,18 @@ qt_add_resources(PrintFlow "app_resources"
         ${RIP_I18N_FILES}
         ${RIP_THEME_FILES}
 )
+
+if(RIP_BLUE_NOISE_MASKS)
+    # Direct object generation prevents the large TIFF payload from expanding
+    # into a generated C++ array that exhausts memory on Android build hosts.
+    qt_add_resources(PrintFlow "blue_noise_resources"
+        PREFIX "/"
+        BASE "resources"
+        BIG_RESOURCES
+        FILES
+            ${RIP_BLUE_NOISE_MASKS}
+    )
+endif()
 
 if(RIP_CUSTOM_THEME_RESOURCE_FILE)
     qt_add_resources(PrintFlow "custom_theme_resource"

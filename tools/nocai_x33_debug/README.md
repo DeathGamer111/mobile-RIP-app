@@ -12,10 +12,11 @@ Build and grant raw-network access:
 ./build/nocai_x33_debug-arm64/bin/nocai_x33_debug
 ```
 
-The build selects `DemoForARM64Linux*` on ARM64 and `DemoForX64Linux*` on
-x86-64, then stages only the matching API and PrinterSocket libraries. ARM64
-uses the SDK's documented plain exports by default. Use `--sdk-abi internal`
-only to compare the vendor's internal mangled entry points.
+The build selects the matching pair from
+`third_party/nocai/direct-print/linux/<architecture>` and stages only that API
+and PrinterSocket library. ARM64 uses the SDK's documented plain exports by
+default. Use `--sdk-abi internal` only to compare the vendor's internal mangled
+entry points.
 
 Run the safe connection probe (search, select only when exactly one printer is
 found, then connect; no print or maintenance commands):

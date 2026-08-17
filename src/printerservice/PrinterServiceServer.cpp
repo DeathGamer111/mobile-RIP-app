@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QLocalSocket>
+#include <QTcpSocket>
 #include <QTimer>
 
 PrinterServiceServer::PrinterServiceServer(QObject* parent)
@@ -14,6 +15,29 @@ PrinterServiceServer::PrinterServiceServer(QObject* parent)
     m_backend.setAutoDiscoverSdk(true);
     connect(&m_server, &QLocalServer::newConnection,
             this, &PrinterServiceServer::acceptConnections);
+    connect(&m_tcpServer, &QTcpServer::newConnection,
+            this, &PrinterServiceServer::acceptTcpConnections);
+}
+
+bool PrinterServiceServer::listenTcp(const QHostAddress& address, quint16 port,
+                                     QString* errorMessage)
+{
+    // The development bridge deliberately accepts loopback only. ADB reverse
+    // makes this endpoint reachable from one attached Android target without
+    // exposing printer-control commands to the local network.
+    if (!PrintFlowPrinterServiceProtocol::isAllowedBridgeAddress(address)) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral(
+                "The Android printer bridge may listen on loopback only.");
+        }
+        return false;
+    }
+    if (!m_tcpServer.listen(address, port)) {
+        if (errorMessage)
+            *errorMessage = m_tcpServer.errorString();
+        return false;
+    }
+    return true;
 }
 
 bool PrinterServiceServer::listen(const QString& socketName,
@@ -47,6 +71,11 @@ QString PrinterServiceServer::socketName() const
     return m_server.serverName();
 }
 
+quint16 PrinterServiceServer::tcpPort() const
+{
+    return m_tcpServer.serverPort();
+}
+
 void PrinterServiceServer::acceptConnections()
 {
     while (QLocalSocket* socket = m_server.nextPendingConnection()) {
@@ -57,6 +86,20 @@ void PrinterServiceServer::acceptConnections()
                 this, &PrinterServiceServer::removeClient);
         connect(socket, &QObject::destroyed, this, [this, socket]() {
             m_buffers.remove(socket);
+        });
+    }
+}
+
+void PrinterServiceServer::acceptTcpConnections()
+{
+    while (QTcpSocket* socket = m_tcpServer.nextPendingConnection()) {
+        m_tcpBuffers.insert(socket, {});
+        connect(socket, &QTcpSocket::readyRead,
+                this, &PrinterServiceServer::readTcpClient);
+        connect(socket, &QTcpSocket::disconnected,
+                this, &PrinterServiceServer::removeTcpClient);
+        connect(socket, &QObject::destroyed, this, [this, socket]() {
+            m_tcpBuffers.remove(socket);
         });
     }
 }
@@ -82,12 +125,45 @@ void PrinterServiceServer::readClient()
     finishRequest(socket, handleRequest(requestMessage));
 }
 
+void PrinterServiceServer::readTcpClient()
+{
+    auto* socket = qobject_cast<QTcpSocket*>(sender());
+    if (!socket || !m_tcpBuffers.contains(socket))
+        return;
+    QByteArray& buffer = m_tcpBuffers[socket];
+    buffer.append(socket->readAll());
+
+    QVariantMap requestMessage;
+    QString decodeError;
+    const auto status = PrintFlowPrinterServiceProtocol::takeFrame(
+        buffer, &requestMessage, &decodeError);
+    if (status == PrintFlowPrinterServiceProtocol::DecodeStatus::Incomplete)
+        return;
+    if (status == PrintFlowPrinterServiceProtocol::DecodeStatus::Invalid) {
+        finishTcpRequest(socket, response(false, {}, decodeError));
+        return;
+    }
+    qInfo("Android bridge request: %s",
+          qPrintable(requestMessage.value(
+              QStringLiteral("command")).toString()));
+    finishTcpRequest(socket, handleRequest(requestMessage));
+}
+
 void PrinterServiceServer::removeClient()
 {
     auto* socket = qobject_cast<QLocalSocket*>(sender());
     if (!socket)
         return;
     m_buffers.remove(socket);
+    socket->deleteLater();
+}
+
+void PrinterServiceServer::removeTcpClient()
+{
+    auto* socket = qobject_cast<QTcpSocket*>(sender());
+    if (!socket)
+        return;
+    m_tcpBuffers.remove(socket);
     socket->deleteLater();
 }
 
@@ -269,4 +345,19 @@ void PrinterServiceServer::finishRequest(QLocalSocket* socket,
     }
     m_buffers.remove(socket);
     socket->disconnectFromServer();
+}
+
+void PrinterServiceServer::finishTcpRequest(QTcpSocket* socket,
+                                            const QVariantMap& result)
+{
+    if (!socket)
+        return;
+    const QByteArray frame = PrintFlowPrinterServiceProtocol::encodeFrame(result);
+    if (!frame.isEmpty()) {
+        socket->write(frame);
+        socket->flush();
+        socket->waitForBytesWritten(5000);
+    }
+    m_tcpBuffers.remove(socket);
+    socket->disconnectFromHost();
 }

@@ -3,6 +3,7 @@
 #include "IPrintOutputClient.h"
 
 #include <QByteArray>
+#include <QHostAddress>
 #include <QString>
 #include <QVariantMap>
 
@@ -25,6 +26,7 @@ QString defaultSocketName();
 QByteArray encodeFrame(const QVariantMap& message);
 DecodeStatus takeFrame(QByteArray& buffer, QVariantMap* message,
                        QString* errorMessage = nullptr);
+bool isAllowedBridgeAddress(const QHostAddress& address);
 
 QVariantMap settingsToMap(const DirectPrintSettings& settings);
 bool settingsFromMap(const QVariantMap& map, DirectPrintSettings* settings,

@@ -1,6 +1,7 @@
 # Vendor Direct-Print Adapter
 
-This folder contains the source adapter only.
+This folder contains the source adapter only. The reviewed Linux runtime files
+live centrally under `third_party/nocai/direct-print/`.
 
 ## Printer/SDK families
 
@@ -18,21 +19,14 @@ compatibility. `multiInkDirectPrintSdkRootPath` is reserved for the newer
 package. Both raster pipelines depend on `IPrintOutputClient`, keeping the SDK
 implementation outside the RIP code.
 
-Proprietary SDK drops, demo packages, shared libraries, generated binaries, and local test copies must remain local and ignored by git. Do not commit vendor SDK files here.
-
-Set `DIRECT_PRINT_SDK_ROOT` to the local vendor SDK path before configuring or building when direct-print SDK packaging is needed:
-
-```bash
-export DIRECT_PRINT_SDK_ROOT=/path/to/local/vendor/sdk/drop
-```
-
-Archive drops can be used without extracting them into the source tree:
-
-```bash
-export DIRECT_PRINT_SDK_ARCHIVE=/path/to/local/vendor/sdk/drop.zip
-```
-
-CMake validates the target ELF architecture and stages the matching Linux API and `PrinterSocketDLL` subtree. The adapter resolves the documented C API first and contains compatibility aliases for the July 2026 x86-64 package's mangled `API_*` exports.
+Full proprietary SDK drops, demos, other-platform libraries, generated
+binaries, local test copies, and diagnostics remain ignored. CMake selects the
+matching ARM64 or x86-64 pair from the central runtime tree, validates its ELF
+architecture, and stages the Linux API and `PrinterSocketDLL` subtree. An
+advanced `DIRECT_PRINT_SDK_ROOT` override may use the same
+`linux/<arm64|x86_64>/` layout. The adapter resolves the documented C API first
+and contains compatibility aliases for the July 2026 x86-64 package's mangled
+`API_*` exports.
 
 That x86-64 package also imports four plain wrappers that it does not define.
 On Linux x86-64, PrintFlow exports the mappings confirmed from the matching ARM

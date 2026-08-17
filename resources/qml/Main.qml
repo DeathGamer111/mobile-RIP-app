@@ -14,7 +14,7 @@ ApplicationWindow {
 
     width: theme.mobile ? availableScreenWidth : theme.defaultWindowWidth
     height: theme.mobile ? availableScreenHeight : theme.defaultWindowHeight
-    minimumWidth: theme.mobile ? 0 : 320
+    minimumWidth: theme.mobile ? 0 : 420
     minimumHeight: theme.mobile ? 0 : 480
     visibility: theme.mobile ? Window.AutomaticVisibility : Window.Windowed
     title: theme.appName.length > 0 ? theme.appName : (strings.language, strings.trKey("app.title"))
@@ -36,8 +36,18 @@ ApplicationWindow {
                                          : "X-33"					// Current printer selection (name or ID).
         property string selectedPPD: ""								// Chosen PPD/profile path or identifier.
         property bool usingSimulatedPrinter: true					// When true, use mock device behavior.
-		property bool usingMultiInkPrinter: selectedPrinter === "X-36NC (Photo Printer)"
-		property int multiInkInkMode: 10							// 4,5,6,7,8,10 – current ink layout.
+        property bool usingMultiInkPrinter: selectedPrinter === "X-36NC (Photo Printer)"
+        property bool selectedPrinterSupportsMultiInk: usingSimulatedPrinter && usingMultiInkPrinter
+        property bool selectedPrinterSupportsWhite: usingSimulatedPrinter
+                                                    && (selectedPrinter === "X-33"
+                                                        || (usingMultiInkPrinter
+                                                            && (multiInkInkMode === 5
+                                                                || multiInkInkMode === 7
+                                                                || multiInkInkMode === 10)))
+        property bool selectedPrinterSupportsVarnish: usingSimulatedPrinter
+                                                      && usingMultiInkPrinter
+                                                      && multiInkInkMode === 10
+        property int multiInkInkMode: 10                         // 4,5,6,7,8,10 – current ink layout.
         property string platformName: platformCapabilities.platformName
         property bool supportsCupsPrinting: platformCapabilities.supportsCupsPrinting
         property bool supportsRipProcessing: platformCapabilities.supportsRipProcessing

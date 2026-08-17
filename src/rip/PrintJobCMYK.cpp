@@ -287,6 +287,7 @@ bool PrintJobCMYK::buildRasterPayload(int xdpi, int ydpi, RasterPayload& payload
 
         // === Step 4: Per-channel FM screen, dot classification, promotion, packing.
         std::vector<std::vector<std::vector<uint8_t>>> allPacked(logicalChannelCount);
+        bool skippedPromotion = false;
 
         for (int ch = 0; ch < logicalChannelCount; ++ch) {
             
@@ -357,20 +358,23 @@ bool PrintJobCMYK::buildRasterPayload(int xdpi, int ydpi, RasterPayload& payload
 
 			// Dot classification uses mask-relative thresholds that adapt across tone.
 			auto dotMap = dotClassification(dithered, classMask, channelBytes, width, height, activeStrategy);
-            //auto dotMap = dotClassification(dithered, maskBytes, channelBytes, width, height, dotStrategy);
 
             // Optional neighborhood “promotion” to enlarge dots in dense regions (reduces peppering).
             if (activeStrategy.enablePromotion) {
                 apply4x4Promotion(dotMap, channelBytes, width, height);
-            }
-			else {
-				qDebug() << "Dot Promotion Disabled — skipping Dot Promotion.";
+            } else {
+                skippedPromotion = true;
 			}
 
             // Pack to 2bpp (4 pixels per byte, big-endian within the byte).
             auto packed = NocaiPrnWriter::packTo2Bpp(dotMap, width, height);
             allPacked[ch] = std::move(packed);
         }
+
+        // Promotion is configured per logical channel, but one summary is
+        // sufficient when one or more channels bypass the stage.
+        if (skippedPromotion)
+            qDebug() << "Dot Promotion Disabled — skipping Dot Promotion.";
 
         payload.packedLines = std::move(allPacked);
         payload.channelOrder = nocaiOrder;

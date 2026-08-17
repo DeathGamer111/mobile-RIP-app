@@ -353,7 +353,7 @@ Item {
 
         // Top branding/header with nav to printer setup.
         Rectangle {
-			height: 60
+			height: theme.appBarHeight
 			Layout.fillWidth: true
 			color: theme.surface
 
@@ -380,7 +380,8 @@ Item {
 
 	                Label {
 						text: strings.trKey("jobs.title")
-						font.pixelSize: root.width < 380 ? 18 : 22
+							font.pixelSize: theme.headerTitleSize(root.width)
+							font.weight: Font.DemiBold
 						color: theme.text
 						horizontalAlignment: Text.AlignHCenter
 						verticalAlignment: Text.AlignVCenter
@@ -435,16 +436,17 @@ Item {
 					}
 
 
-				C.Menu {
-					id: settingsMenu
-					padding: 6
+					C.Menu {
+						id: settingsMenu
+						padding: 6
+						modal: root.theme.mobile
+						closePolicy: C.Popup.CloseOnEscape | C.Popup.CloseOnPressOutside
 					parent: root.Window.window ? root.Window.window.contentItem : root
-					modal: false
 
 					background: Rectangle {
 						color: theme.surface2
 						radius: 10
-						implicitWidth: 240
+						implicitWidth: root.theme.mobile ? Math.min(272, root.width - 24) : 240
 						implicitHeight: contentItem ? contentItem.implicitHeight + 12 : 120
 						border.width: 1
 						border.color: theme.divider
@@ -452,6 +454,7 @@ Item {
 
 						C.MenuItem {
 							id: miLoad
+							implicitHeight: root.theme.mobile ? 44 : implicitContentHeight
 							text: strings.trKey("jobs.load")
 							hoverEnabled: true
 
@@ -464,7 +467,7 @@ Item {
 											: "transparent")
 							}
 
-							contentItem: Label { text: miLoad.text; color: root.theme.text; verticalAlignment: Text.AlignVCenter }
+							contentItem: Label { text: miLoad.text; color: root.theme.text; font.pixelSize: root.theme.labelTextSize; verticalAlignment: Text.AlignVCenter }
 
 							onTriggered: {
 								settingsMenu.close()
@@ -476,6 +479,7 @@ Item {
 
 						C.MenuItem {
 							id: miCreateFromImage
+							implicitHeight: root.theme.mobile ? 44 : implicitContentHeight
 							text: strings.trKey("jobs.createFromImage")
 							hoverEnabled: true
 
@@ -488,7 +492,7 @@ Item {
 											: "transparent")
 							}
 
-							contentItem: Label { text: miCreateFromImage.text; color: root.theme.text; verticalAlignment: Text.AlignVCenter }
+							contentItem: Label { text: miCreateFromImage.text; color: root.theme.text; font.pixelSize: root.theme.labelTextSize; verticalAlignment: Text.AlignVCenter }
 
 							onTriggered: {
 								settingsMenu.close()
@@ -505,6 +509,7 @@ Item {
 
 						C.MenuItem {
 							id: miPrinter
+							implicitHeight: root.theme.mobile ? 44 : implicitContentHeight
 							text: strings.trKey("jobs.printerSetup")
 							hoverEnabled: true
 
@@ -517,7 +522,7 @@ Item {
 											: "transparent")
 							}
 
-							contentItem: Label { text: miPrinter.text; color: root.theme.text; verticalAlignment: Text.AlignVCenter }
+							contentItem: Label { text: miPrinter.text; color: root.theme.text; font.pixelSize: root.theme.labelTextSize; verticalAlignment: Text.AlignVCenter }
 
 							onTriggered: {
 								settingsMenu.close()
@@ -533,6 +538,7 @@ Item {
 
 						C.MenuItem {
 							id: miMaintenance
+							implicitHeight: root.theme.mobile ? 44 : implicitContentHeight
 							text: strings.trKey("jobs.printerMaintenance")
 							enabled: nocaiDirectPrint.supportsMaintenance(appState.selectedPrinter)
 							hoverEnabled: enabled
@@ -549,6 +555,7 @@ Item {
 							contentItem: Label {
 								text: miMaintenance.text
 								color: miMaintenance.enabled ? root.theme.text : root.theme.subtext
+								font.pixelSize: root.theme.labelTextSize
 								opacity: miMaintenance.enabled ? 1.0 : 0.55
 								verticalAlignment: Text.AlignVCenter
 							}
@@ -567,6 +574,7 @@ Item {
 
 						C.MenuItem {
 							id: miColor
+							implicitHeight: root.theme.mobile ? 44 : implicitContentHeight
 							text: strings.trKey("jobs.colorManagement")
 							hoverEnabled: true
 
@@ -579,7 +587,7 @@ Item {
 											: "transparent")
 							}
 
-							contentItem: Label { text: miColor.text; color: root.theme.text; verticalAlignment: Text.AlignVCenter }
+							contentItem: Label { text: miColor.text; color: root.theme.text; font.pixelSize: root.theme.labelTextSize; verticalAlignment: Text.AlignVCenter }
 
 							onTriggered: {
 								settingsMenu.close()
@@ -595,6 +603,7 @@ Item {
 
 						C.MenuItem {
 							id: miLanguage
+							implicitHeight: root.theme.mobile ? 44 : implicitContentHeight
 							text: strings.trKey("language.menu")
 							hoverEnabled: true
 
@@ -607,7 +616,7 @@ Item {
 											: "transparent")
 							}
 
-							contentItem: Label { text: miLanguage.text; color: root.theme.text; verticalAlignment: Text.AlignVCenter }
+							contentItem: Label { text: miLanguage.text; color: root.theme.text; font.pixelSize: root.theme.labelTextSize; verticalAlignment: Text.AlignVCenter }
 
 							onTriggered: {
 								settingsMenu.close()
@@ -620,6 +629,7 @@ Item {
 
 						C.MenuItem {
 							id: miDarkMode
+							implicitHeight: root.theme.mobile ? 44 : implicitContentHeight
 							text: root.theme.dark ? strings.trKey("jobs.switchLight") : strings.trKey("jobs.switchDark")
 							hoverEnabled: true
 
@@ -631,7 +641,7 @@ Item {
 											? Qt.rgba(root.theme.text.r, root.theme.text.g, root.theme.text.b, 0.12)
 											: "transparent")
 							}
-							contentItem: Label { text: miDarkMode.text; color: root.theme.text; verticalAlignment: Text.AlignVCenter }
+							contentItem: Label { text: miDarkMode.text; color: root.theme.text; font.pixelSize: root.theme.labelTextSize; verticalAlignment: Text.AlignVCenter }
 							onTriggered: root.theme.dark = !root.theme.dark
 						}
 				}
@@ -738,7 +748,7 @@ Item {
         // Toolbar controlling selection lifecycle and save/remove actions.
         Frame {
             Layout.fillWidth: true
-            Layout.preferredHeight: selectionMode && root.width < 430 ? 118 : 62
+			Layout.preferredHeight: selectionMode && root.width < 430 ? 112 : 56
             padding: 10
 			background: Rectangle { color: theme.surface2 }
 
@@ -753,7 +763,7 @@ Item {
 					text: strings.trKey("jobs.new")
 					theme: root.theme
 					padding: 12
-					font.pixelSize: 15
+					font.pixelSize: theme.buttonTextSize
 					onClicked: jobModel.addJob("New Print Job")
 				}
 				
@@ -763,7 +773,7 @@ Item {
 					text: strings.trKey("jobs.select")
 					theme: root.theme
 					padding: 12
-					font.pixelSize: 15
+					font.pixelSize: theme.buttonTextSize
 					onClicked: {
 						selectedIndexes = []
 						selectionMode = true
@@ -776,7 +786,7 @@ Item {
                 anchors.leftMargin: 8
                 anchors.rightMargin: 8
                 visible: selectionMode
-                columns: root.theme.gridColumns(width, 4, 104)
+                columns: root.theme.mobile ? 2 : root.theme.gridColumns(width, 4, 104)
                 columnSpacing: 8
                 rowSpacing: 8
 

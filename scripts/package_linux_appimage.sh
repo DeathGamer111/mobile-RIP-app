@@ -13,6 +13,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-output}"
 TOOLS_ROOT="${TOOLS_ROOT:-${REPO_ROOT}/.tools/appimage}"
 RIP_THEME="${RIP_THEME:-default}"
 RIP_THEME_FILE="${RIP_THEME_FILE:-}"
+DIRECT_PRINT_SDK_ROOT="${DIRECT_PRINT_SDK_ROOT:-${REPO_ROOT}/third_party/nocai/direct-print}"
 
 fail() {
     printf 'error: %s\n' "$1" >&2
@@ -121,6 +122,11 @@ for candidate in libmagick++-6.q16-dev libmagick++-7.q16-dev libmagick++-dev; do
 done
 [[ -n "${IMAGEMAGICK_DEV_PACKAGE}" ]] || fail "No supported ImageMagick Magick++ development package is available."
 
+QT6_SVG_PLUGIN_PACKAGES=()
+if apt_package_available qt6-svg-plugins; then
+    QT6_SVG_PLUGIN_PACKAGES+=(qt6-svg-plugins)
+fi
+
 sudo apt-get install -y --no-remove \
     cmake g++ qt6-base-dev qt6-base-private-dev qt6-declarative-dev \
     qt6-declarative-dev-tools qt6-tools-dev qt6-tools-dev-tools \
@@ -132,8 +138,8 @@ sudo apt-get install -y --no-remove \
     "${FUSE2_PACKAGE}" zsync xz-utils libgl1-mesa-dev libopengl-dev libvulkan-dev \
     qt6-qmltooling-plugins libqt6widgets6 qml6-module-qtpositioning \
     qml6-module-qtcore qml6-module-qtquick-window qml-module-qtquick-shapes \
-    qml6-module-qtquick-shapes qt5-qmltooling-plugins qt6-image-formats-plugins qt6-svg-plugins \
-    libqt6svg6 libqt6svgwidgets6 qml6-module-qtqml-workerscript \
+    qml6-module-qtquick-shapes qt5-qmltooling-plugins qt6-image-formats-plugins \
+    "${QT6_SVG_PLUGIN_PACKAGES[@]}" libqt6svg6 libqt6svgwidgets6 qml6-module-qtqml-workerscript \
     qml6-module-qtquick-templates libqt6test6 binutils
 
 require_command cmake
@@ -163,6 +169,7 @@ mapfile -t THEME_CMAKE_ARGS < <(theme_cmake_args)
 cmake -S . -B "${BUILD_DIR}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_TESTING=OFF \
+    -DDIRECT_PRINT_SDK_ROOT="${DIRECT_PRINT_SDK_ROOT}" \
     -DDIRECT_PRINT_SDK_STRICT=ON \
     "${THEME_CMAKE_ARGS[@]}"
 cmake --build "${BUILD_DIR}" --target PrintFlow --parallel "$(nproc)"

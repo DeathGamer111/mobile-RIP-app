@@ -2,12 +2,18 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
+
 BUILD_DIR="${BUILD_DIR:-build-android}"
 ANDROID_ABI="${ANDROID_ABI:-x86_64}"
 ANDROID_ENV_FILE="${ANDROID_ENV_FILE:-.android-env}"
 GRADLE_USER_HOME="${GRADLE_USER_HOME:-$(pwd)/.gradle}"
 RIP_THEME="${RIP_THEME:-default}"
 RIP_THEME_FILE="${RIP_THEME_FILE:-}"
+RIP_ANDROID_ENABLE_RIP_PROCESSING="${RIP_ANDROID_ENABLE_RIP_PROCESSING:-ON}"
+RIP_EMBED_BLUE_NOISE_MASKS="${RIP_EMBED_BLUE_NOISE_MASKS:-OFF}"
 GRADLE_OPTS="${GRADLE_OPTS:-} -Djava.net.preferIPv4Stack=true -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false"
 export GRADLE_USER_HOME
 export GRADLE_OPTS
@@ -19,7 +25,6 @@ CALLER_QT_HOST_PATH="${QT_HOST_PATH:-}"
 CALLER_ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-}"
 CALLER_ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-}"
 CALLER_DIRECT_PRINT_SDK_ROOT="${DIRECT_PRINT_SDK_ROOT:-}"
-CALLER_DIRECT_PRINT_SDK_ARCHIVE="${DIRECT_PRINT_SDK_ARCHIVE:-}"
 
 if [[ -f "${ANDROID_ENV_FILE}" ]]; then
     # shellcheck disable=SC1090
@@ -33,7 +38,6 @@ BUILD_DIR="${CALLER_BUILD_DIR}"
 [[ -n "${CALLER_ANDROID_SDK_ROOT}" ]] && ANDROID_SDK_ROOT="${CALLER_ANDROID_SDK_ROOT}"
 [[ -n "${CALLER_ANDROID_NDK_ROOT}" ]] && ANDROID_NDK_ROOT="${CALLER_ANDROID_NDK_ROOT}"
 [[ -n "${CALLER_DIRECT_PRINT_SDK_ROOT}" ]] && DIRECT_PRINT_SDK_ROOT="${CALLER_DIRECT_PRINT_SDK_ROOT}"
-[[ -n "${CALLER_DIRECT_PRINT_SDK_ARCHIVE}" ]] && DIRECT_PRINT_SDK_ARCHIVE="${CALLER_DIRECT_PRINT_SDK_ARCHIVE}"
 
 fail() {
     printf 'error: %s\n' "$1" >&2
@@ -92,8 +96,8 @@ adjust_qt_android_cmake_for_abi() {
     local target qt_bin qt_target_dir qt_version_dir candidate
 
     target="$(qt_target_for_abi "${ANDROID_ABI}" || true)"
-    [[ -n "${target}" && -n "${QT_ANDROID_CMAKE:-}" ]] || return
-    [[ "${QT_ANDROID_CMAKE}" != *"/${target}/"* ]] || return
+    [[ -n "${target}" && -n "${QT_ANDROID_CMAKE:-}" ]] || return 0
+    [[ "${QT_ANDROID_CMAKE}" != *"/${target}/"* ]] || return 0
 
     qt_bin="$(dirname "${QT_ANDROID_CMAKE}")"
     qt_target_dir="$(dirname "${qt_bin}")"
@@ -137,16 +141,28 @@ require_command adb
 require_command emulator
 mkdir -p "${GRADLE_USER_HOME}"
 
+SDK_CMAKE_ARGS=(-DDIRECT_PRINT_SDK_ENABLED=OFF)
 if [[ -n "${DIRECT_PRINT_SDK_ROOT:-}" ]]; then
     require_path "DIRECT_PRINT_SDK_ROOT" "${DIRECT_PRINT_SDK_ROOT}"
-elif [[ -n "${DIRECT_PRINT_SDK_ARCHIVE:-}" ]]; then
-    require_path "DIRECT_PRINT_SDK_ARCHIVE" "${DIRECT_PRINT_SDK_ARCHIVE}"
+    "${REPO_ROOT}/scripts/validate_android_direct_print_sdk.sh" \
+        "${DIRECT_PRINT_SDK_ROOT}" "${ANDROID_ABI}"
+    SDK_CMAKE_ARGS=(
+        -DDIRECT_PRINT_SDK_ENABLED=ON
+        -DDIRECT_PRINT_SDK_STRICT=ON
+        -DDIRECT_PRINT_SDK_ROOT="${DIRECT_PRINT_SDK_ROOT}"
+    )
 else
-    printf 'warning: no direct-print SDK root or archive is set; APK will build without the direct-print SDK library.\n' >&2
+    printf 'note: native Android SDK staging is disabled; the temporary ADB printer bridge remains available.\n' >&2
 fi
 
 mapfile -t THEME_CMAKE_ARGS < <(theme_cmake_args)
 printf 'Theme: %s%s\n' "${RIP_THEME}" "${RIP_THEME_FILE:+ from ${RIP_THEME_FILE}}"
+
+RIP_CMAKE_ARGS=(-DRIP_ANDROID_ENABLE_RIP_PROCESSING="${RIP_ANDROID_ENABLE_RIP_PROCESSING}")
+if [[ "${RIP_ANDROID_ENABLE_RIP_PROCESSING}" == "ON" ]]; then
+    "${REPO_ROOT}/scripts/setup_android_imagemagick.sh"
+fi
+RIP_CMAKE_ARGS+=( -DRIP_EMBED_BLUE_NOISE_MASKS="${RIP_EMBED_BLUE_NOISE_MASKS}" )
 
 "${QT_ANDROID_CMAKE}" \
     -S . \
@@ -157,6 +173,8 @@ printf 'Theme: %s%s\n' "${RIP_THEME}" "${RIP_THEME_FILE:+ from ${RIP_THEME_FILE}
     -DANDROID_NDK_ROOT="${ANDROID_NDK_ROOT}" \
     -DQT_HOST_PATH="${QT_HOST_PATH}" \
     -DQT_ANDROID_ABIS="${ANDROID_ABI}" \
+    "${RIP_CMAKE_ARGS[@]}" \
+    "${SDK_CMAKE_ARGS[@]}" \
     "${THEME_CMAKE_ARGS[@]}"
 
 cmake --build "${BUILD_DIR}" --target apk --parallel

@@ -4,7 +4,7 @@
 
 PrintFlow is a Qt 6 raster image processing application for preparing print jobs, previewing and editing artwork, managing printer settings, and generating raster/PRN output through pluggable vendor backends.
 
-The current codebase is focused on Linux desktop development with CMake, CUPS, ImageMagick, and Little CMS. Android APK support is available for emulator boot testing and physical-device packaging work.
+The current codebase supports Linux desktop development and Android APKs with CMake, Qt, ImageMagick, and Little CMS. Linux output uses CUPS; Android uses either the temporary printer-service bridge or a future Android-native vendor SDK.
 
 ## Current Status
 
@@ -14,7 +14,7 @@ The current codebase is focused on Linux desktop development with CMake, CUPS, I
 - Main development build script: `./Dev_Build_App.sh`
 - Primary executable target: `PrintFlow`
 - Linux desktop status: builds and runs with the native RIP pipeline, CUPS integration, ImageMagick, Little CMS, theme resources, string resources, and the local test suite.
-- Android APK status: x86_64 emulator builds use boot-safe Android facades. Android direct print is packaged only when the supplied SDK contains an Android API library for the target ABI; Linux ARM64 libraries are not placed into Android APKs.
+- Android APK status: API 36 x86-64 emulator and ARM64 device APKs build successfully with native ImageMagick image editing and RIP code. Import, preview, resize, and save are emulator-verified. Native Android vendor communication still requires an Android/Bionic SDK; the temporary ADB printer bridge routes the app to the Linux SDK for testing.
 - Base product identity: `PrintFlow`; customer or vendor display branding belongs in theme configuration.
 
 ## Features
@@ -22,15 +22,18 @@ The current codebase is focused on Linux desktop development with CMake, CUPS, I
 - Print job management with Qt model roles and JSON persistence.
 - Image loading, validation, metadata extraction, and PDF preview rendering through ImageMagick.
 - Image editing tools for crop, rotate, flip, resize, color adjustment, blur, sepia, vignette, swirl, implode, text, rectangle drawing, undo, and redo.
-- Imposition view for positioning artwork on the selected media.
+- Job Details with repeatable artwork replacement, live preview refresh, image metadata, output settings, and persisted job options.
+- Imposition view for positioning artwork on the selected media and carrying the same origin into direct print.
+- Media-size selection for ISO A0-A6, Letter, Legal, Tabloid, common 12x18 through 32x48 sign sizes, 24x36 Coroplast, and custom dimensions.
 - Printer setup flow for desktop printers, prepared PRN output, and optional vendor direct-print workflows.
 - ICC profile handling through Little CMS, including bundled CMYK and multi-ink output profiles.
-- Color-management settings for default input/output profiles, printer-specific profiles, profile families, and persisted dot strategy settings.
+- Device-aware Color Management: X-33 exposes CMYK and supported white controls while Multi Ink-only thresholds remain disabled; X-36NC exposes its selected multi-channel controls.
 - PRN generation with 2-bit dot classification, stochastic screening, and dot promotion controls.
 - Multi-ink PRN generation with 4, 5, 6, 7, 8, and 10 channel ink layouts.
 - Linearization support using bundled XML presets.
 - Runtime asset preparation for bundled ICC profiles, linearization files, logo assets, and local blue-noise masks.
-- Theme and string-resource systems for build-time branding and runtime language selection.
+- Default, Nocai, and Xante/iQueue build themes plus custom theme JSON support.
+- Central English and Simplified Chinese string tables with automated key-parity checks for translatable UI text.
 
 ## Supported Ink Layouts
 
@@ -57,12 +60,14 @@ The multi-ink backend currently supports:
 |-- scripts/                       Linux, Android, packaging, and policy helper scripts
 |-- src/app/                       Application bootstrap
 |-- src/core/                      Shared models, settings, assets, strings, themes, and capabilities
-|-- src/platform/android/          Android-safe platform facades for APK boot
+|-- src/platform/android/          Android output integration and optional fallback facades
 |-- src/platform/desktop/          Linux desktop integrations such as CUPS
 |-- src/printerservice/            Persistent service, versioned IPC, and public client API
 |-- src/rip/                       Native RIP, color, screening, and PRN pipeline
 |-- src/third_party/stb/           Third-party single-header image loader
-`-- src/vendor/nocai/              Isolated direct-print vendor adapter
+|-- src/vendor/nocai/              Isolated direct-print vendor adapter
+|-- third_party/imagemagick/       Curated x86-64 and ARM64 Android runtime
+`-- third_party/nocai/direct-print Minimal direct-print SDK payloads
 ```
 
 ## Tests
@@ -73,7 +78,7 @@ Run the local Linux test suite with:
 scripts/run_tests.sh
 ```
 
-The script configures `build-tests`, builds the app and test executables, then runs `ctest --output-on-failure`. Tests cover the job model, asset/platform helpers, string resources, theme loading, RIP pipeline behavior, Android-safe stubs, vendor isolation, SDK architecture normalization, archive selection, and ELF validation. Ordinary test builds do not require `DIRECT_PRINT_SDK_ROOT`, blue-noise mask fixtures, or an Android device.
+The script configures `build-tests`, builds the app and test executables, then runs `ctest --output-on-failure`. Tests cover the job model, asset/platform helpers, string-table parity, theme loading, RIP pipeline behavior, Android-safe stubs, vendor isolation, canonical SDK paths, and ARM64/x86-64 ELF validation. Tests do not require blue-noise mask fixtures or an Android device.
 
 Important QML views include:
 
@@ -103,22 +108,22 @@ resources/assets/blue_noise_mask_*/**
 
 For local builds that generate multi-ink output, the app expects `resources/assets/blue_noise_mask_512_12000/` to exist locally with the mask TIFF files used by `scripts/dev_build_linux.sh`. The masks can be embedded into Qt resources with `-DRIP_EMBED_BLUE_NOISE_MASKS=ON`, but the default leaves them as local runtime assets to avoid very large generated resource objects.
 
-Theme assets live under `resources/themes/<theme-id>/assets/` or `resources/vendor/<vendor-id>/assets/` and are compiled into Qt resources when referenced by theme JSON. Vendor SDK drops and local vendor assets that are not safe to publish should remain outside tracked files or under ignored local paths.
+Theme assets live under `resources/themes/<theme-id>/assets/` or `resources/vendor/<vendor-id>/assets/` and are compiled into Qt resources when referenced by theme JSON. Raw vendor drops, demo programs, and diagnostics stay ignored; the four reviewed Linux runtime libraries are centralized under `third_party/nocai/direct-print/`.
 
-## Direct-print SDK selection
+## Direct-print SDK
 
-CMake selects direct-print binaries using the target platform and target processor, including when cross-compiling.
+The Linux SDK is maintained in one minimal, architecture-keyed location:
 
-Supply either an extracted SDK root or an archive:
-
-```bash
-cmake -S . -B build -DDIRECT_PRINT_SDK_ROOT=/path/to/extracted/sdk
-cmake -S . -B build -DDIRECT_PRINT_SDK_ARCHIVE=/path/to/vendor-sdk.zip
+```text
+third_party/nocai/direct-print/
+`-- linux/
+    |-- arm64/{libSYPrintAPIforPROII.so,PrinterSocket.so}
+    `-- x86_64/{libSYPrintAPIforPROII.so,PrinterSocket.so}
 ```
 
-The settings may also be exported as environment variables. When neither is set, Linux builds auto-detect one matching local `DemoForX64Linux*.zip` or `DemoForARM64Linux*.tar*` archive. Archives are extracted only under the build directory.
+CMake chooses the pair from the target processor, validates both ELF machine types, stages the API beside `PrintFlowPrinterService`, and recreates the vendor-required `PrinterSocketDLL/linux/<arm64|x64>/PrinterSocket.so` runtime path. Development builds, the standalone X-33 debugger, AppImages, and Debian packages all consume this same location. Native packages include only their target architecture; the GUI never loads the proprietary library directly.
 
-For Linux, CMake validates the ELF machine type and stages `libSYPrintAPIforPROII.so` beside `PrintFlowPrinterService`, preserving the required `PrinterSocketDLL/linux/<architecture>/PrinterSocket.so` subtree. The desktop GUI does not load the proprietary library. Set `-DDIRECT_PRINT_SDK_STRICT=ON` to make missing, ambiguous, incomplete, or architecture-mismatched SDK inputs a configuration error. The development and package workflows always enable strict mode; ordinary CMake and test builds may omit the proprietary SDK.
+The original demo trees, demo executables, other operating-system libraries, unmatched 32-bit socket, archives, and packet-capture diagnostics are not build inputs. See `third_party/nocai/direct-print/README.md` for provenance, checksums, and the supported architecture boundary. `DIRECT_PRINT_SDK_ROOT` remains available only as an advanced override and must use the same `<platform>/<architecture>` layout.
 
 The July 2026 x86-64 SDK exports internal `API_*` C++ symbols instead of most documented C names. The adapter prefers the documented interface and falls back to the known x86-64 aliases, allowing this package to load while remaining compatible with a corrected vendor build.
 
@@ -185,7 +190,6 @@ Build a native, architecture-specific package with the same theme and SDK overri
 ```bash
 ./Dev_Build_App.sh --linux-package
 RIP_THEME=nocai ./Dev_Build_App.sh --linux-package
-DIRECT_PRINT_SDK_ARCHIVE=/path/to/vendor-sdk.tar ./Dev_Build_App.sh --linux-package
 ```
 
 The workflow selects `x86_64` or `aarch64` from the host architecture, requires the matching direct-print SDK, and packages only that API and printer-socket library. It uses the official `linuxdeploy` Qt and AppImage plugins cached under ignored `.tools/`, validates the GUI, service, public API, and SDK ELF architectures, and writes `output/PrintFlow-<version>-<arch>.AppImage`. It also produces a native Debian package containing the GUI, persistent service, public API development package, and matching SDK. Its install hook grants only the service `CAP_NET_RAW`; this is the recommended customer deployment because capabilities inside a FUSE-mounted AppImage are not reliable. Packages are native per architecture rather than universal.
@@ -273,7 +277,7 @@ Custom file builds fail during CMake configure when the file is missing, invalid
 
 ## Android Build
 
-The Android milestone is an APK that builds, installs, and boots in an emulator while keeping desktop-only dependencies behind platform facades. Android x86_64 emulator builds use safe facades for CUPS and the native RIP dependency stack and do not require a direct-print SDK.
+Android builds use the native ImageMagick 7.1.2-29 Magick++ stack for image editing, color handling, and RIP processing. The curated Q16 HDRI runtime supports `x86_64` emulator and `arm64-v8a` device builds and lives under `third_party/imagemagick/android`. CUPS remains behind an Android output implementation. Until the vendor supplies Android/Bionic printer libraries, Android builds use the versioned PrintFlow printer-service client over a loopback-only ADB reverse tunnel.
 
 Required environment variables for emulator builds:
 
@@ -283,15 +287,34 @@ export ANDROID_SDK_ROOT="$PWD/.android-sdk"
 export ANDROID_NDK_ROOT="$ANDROID_SDK_ROOT/ndk/<version>"
 ```
 
-Optional environment variable for physical-device direct-print packaging:
+Optional advanced override for a future complete Android SDK tree:
 
 ```bash
-export DIRECT_PRINT_SDK_ROOT="/path/to/local/vendor/sdk/drop"
-# Or:
-export DIRECT_PRINT_SDK_ARCHIVE="/path/to/local/vendor/sdk/drop.zip"
+export DIRECT_PRINT_SDK_ROOT="/path/to/sdk/root"
 ```
 
-Use only one SDK variable at a time. Android packaging requires `libSYPrintAPIforPROII.so` under an `android/<abi>/` directory in the supplied drop. A Linux/glibc API library is deliberately rejected for Android even when its CPU architecture matches. If `.android-env` points at the x86_64 Qt kit, the build script switches to the sibling `android_arm64_v8a` kit when it exists. SDK files remain local and ignored.
+Android packaging requires `android/<arm64|x86_64>/libSYPrintAPIforPROII.so` and `android/<arm64|x86_64>/libPrinterSocket.so` below that root. The bundled Linux/glibc libraries are deliberately excluded from APKs even when the CPU architecture matches. If `.android-env` points at the x86_64 Qt kit, the build script switches to the sibling `android_arm64_v8a` kit when it exists.
+
+Validate an Android SDK before building:
+
+```bash
+scripts/validate_android_direct_print_sdk.sh \
+  third_party/nocai/direct-print arm64-v8a
+```
+
+The device build enables strict SDK packaging only after this check passes. It rejects missing pairs, wrong ELF architectures, Linux/glibc dependencies, and missing required API symbols. Android manifests include Internet, network-state, Wi-Fi-state, and multicast permissions for local printer discovery. API 36 and lower use `INTERNET` for LAN access; a future target-SDK 37 update will also need the Android 17 local-network runtime permission flow.
+
+The temporary bridge exercises the real Linux vendor SDK but does not validate Android-native printer networking. Start it after the Linux app and Android APK have been built:
+
+```bash
+./scripts/run_android_printer_bridge.sh
+```
+
+The script selects one attached Android target (or `ANDROID_SERIAL`), installs an ADB reverse mapping from Android `127.0.0.1:19733` to the same loopback-only port on Linux, and starts `PrintFlowPrinterService` with its opt-in bridge listener. No printer-control TCP port is exposed to the LAN. The Android app can then use setup, status, maintenance, and nozzle-check calls through the real SDK. Native image processing is enabled in the default APK; set `RIP_EMBED_BLUE_NOISE_MASKS=ON` when building an APK that must rasterize a complete print job locally.
+
+The Android build runs `scripts/setup_android_imagemagick.sh` automatically. That helper downloads pinned x86-64 and ARM64 release archives, verifies their SHA-256 checksums, and stages only Magick++, MagickWand, MagickCore, and OpenMP. It deliberately excludes the command-line program, demos, static libraries, and the release archive's duplicate C++ runtime. Set `RIP_ANDROID_ENABLE_RIP_PROCESSING=OFF` only when a boot-only fallback APK is required.
+
+An emulator is suitable for Qt/QML, application-flow, and bridged maintenance testing. Final direct printer validation must use a physical ARM64 Android device on the printer-facing network with the Android/Bionic vendor SDK. See `third_party/nocai/direct-print/android/README.md` for the required vendor payload.
 
 Install the local Android SDK command-line tools, emulator packages, and a Pixel-style AVD:
 
@@ -303,6 +326,12 @@ Build the APK:
 
 ```bash
 scripts/dev_build_android.sh
+```
+
+Build a full local-rasterization APK with the blue-noise print masks:
+
+```bash
+RIP_EMBED_BLUE_NOISE_MASKS=ON scripts/dev_build_android.sh
 ```
 
 Build, install, and launch it on the emulator:
@@ -325,14 +354,14 @@ ANDROID_TARGET=device scripts/android_build_install_run.sh
 
 The device path defaults to `ANDROID_ABI=arm64-v8a`, `BUILD_DIR=build-android-device`, and `adb -d`. Set `ANDROID_SERIAL=<serial>` when more than one physical device is connected.
 
-The Android build defaults to `ANDROID_ABI=x86_64` for emulator testing on Linux. The x86_64 emulator requires KVM/VM acceleration with writable `/dev/kvm`; without it, `scripts/start_android_emulator.sh` and `scripts/run_android_emulator.sh` fail early with a host-setup message.
+The Android build defaults to `ANDROID_ABI=x86_64` for emulator testing on Linux and still compiles against API 36. The x86_64 emulator requires KVM/VM acceleration with writable `/dev/kvm`; without it, `scripts/start_android_emulator.sh` and `scripts/run_android_emulator.sh` fail early with a host-setup message. The local `PrintFlow_Pixel_1080p_API35` AVD uses the stable API 35 Google image and is tuned for this test box with 3 guest CPU cores, 6 GB RAM, host GPU rendering, and a 1080x1920 display. API 35 avoids the recurring System UI watchdog failures observed with the API 36 emulator image while continuing to run the API 36-compiled APK. Set `EMULATOR_HEADLESS=1` only for unattended runs.
 
 ## Development Notes
 
 - `build/` is ignored and should not be committed.
 - The generated Qt resource output under `.rcc/` is ignored.
 - The blue-noise mask source directory is ignored because the masks are large local runtime assets.
-- Vendor SDK drops are local-only and should stay outside tracked public documentation and commits.
+- Only the four curated Linux SDK runtime files belong under `third_party/nocai/direct-print`; full vendor drops and diagnostics remain ignored.
 - The tracked ICC and XML assets are required by the color-management and multi-ink paths.
 - `Dev_Build_App.sh` is a compatibility wrapper around `scripts/dev_build_linux.sh`.
 - `scripts/setup_android_emulator.sh` installs local Android SDK/emulator packages and creates the default AVD.

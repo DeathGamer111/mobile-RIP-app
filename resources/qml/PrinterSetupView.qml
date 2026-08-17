@@ -29,21 +29,21 @@ Page {
     property var nocaiPrinterCapabilities: {
         "X-33": {
             resolutions: ["720x720", "720x1440", "720x2160"],
-            mediaSizes: ["A1", "A2", "A3", "A4", "A5", "A6", "Tabloid"],
+            mediaSizes: ["A0", "A1", "A2", "A3", "A4", "A5", "A6", "Letter", "Legal", "Tabloid", "12x18", "18x24", "24x36", "24x48", "32x48"],
             duplexModes: ["None"],
             colorModes: ["CMYK", "CMYKWW", "CMYKWV"]
         },
 
         "X-24": {
             resolutions: ["720x720", "720x1440", "720x2160"],
-            mediaSizes: ["A2", "A3", "A4", "A5", "A6", "Tabloid"],
+            mediaSizes: ["A2", "A3", "A4", "A5", "A6", "Letter", "Legal", "Tabloid", "12x18", "18x24", "24x36"],
             duplexModes: ["None"],
             colorModes: ["CMYK", "CMYKWW", "CMYKWV"]
         },
 
         "X-36NC (Photo Printer)": {
             resolutions: ["720x720", "720x1440", "720x2160"],
-            mediaSizes: ["A2", "A3", "A4", "A5", "A6", "Tabloid"],
+            mediaSizes: ["A2", "A3", "A4", "A5", "A6", "Letter", "Legal", "Tabloid", "12x18", "18x24", "24x36", "24x48", "32x48"],
             duplexModes: ["None"],
             colorModes: [
                 "4: CMYK",
@@ -103,13 +103,14 @@ Page {
         }
 
         syncSdkPrinterCombo()
-        toast.show(ok ? "SDK printer list refreshed." : "SDK unavailable: " + nocaiDirectPrint.lastError)
+        toast.show(ok ? strings.trKey("printerSetup.toast.sdkPrintersRefreshed")
+                      : strings.trKey("printerSetup.toast.sdkUnavailable") + nocaiDirectPrint.lastError)
         return ok
     }
 
     function connectSdkPrinter() {
         if (nocaiDirectPrint.maintenanceBusy) {
-            toast.show("A printer SDK operation is already running.")
+            toast.show(strings.trKey("printerSetup.toast.sdkBusy"))
             return
         }
 
@@ -120,7 +121,7 @@ Page {
             {"printerIndex": appState.sdkSelectedPrinterIndex})
         if (!started) {
             sdkConnectionState = "failed"
-            toast.show("ConnectPrinter could not start: " + nocaiDirectPrint.lastError)
+            toast.show(strings.trKey("printerSetup.toast.connectFailed") + nocaiDirectPrint.lastError)
         }
     }
 
@@ -146,8 +147,8 @@ Page {
                 root.syncSdkPrintersAfterConnection()
                 root.sdkConnectionState = succeeded ? "connected" : "failed"
                 toast.show(succeeded
-                           ? "SDK printer connected."
-                           : "ConnectPrinter failed: " + errorMessage)
+                           ? strings.trKey("printerSetup.toast.sdkConnected")
+                           : strings.trKey("printerSetup.toast.connectFailed") + errorMessage)
                 if (succeeded)
                     Qt.callLater(root.refreshSdkStatusAndInfo)
                 return
@@ -155,8 +156,8 @@ Page {
             if (action === "GetPrinterStatus") {
                 root.sdkConnectionState = succeeded ? "connected" : "unavailable"
                 toast.show(succeeded
-                           ? "Printer status refreshed."
-                           : "Printer status unavailable: " + errorMessage)
+                           ? strings.trKey("printerSetup.toast.statusRefreshed")
+                           : strings.trKey("printerSetup.toast.statusUnavailable") + errorMessage)
                 return
             }
             if (action === "ReconnectPrinter" || action === "RestartPrinterService") {
@@ -167,11 +168,11 @@ Page {
 
     function refreshSdkStatusAndInfo() {
         if (nocaiDirectPrint.maintenanceBusy) {
-            toast.show("A printer SDK operation is already running.")
+            toast.show(strings.trKey("printerSetup.toast.sdkBusy"))
             return
         }
         if (!nocaiDirectPrint.startMaintenanceAction("GetPrinterStatus", {}))
-            toast.show("Could not refresh printer status: " + nocaiDirectPrint.lastError)
+            toast.show(strings.trKey("printerSetup.toast.statusRefreshFailed") + nocaiDirectPrint.lastError)
     }
 
     function syncSdkPrinterCombo() {
@@ -378,7 +379,7 @@ Page {
         if (!hasPrinterSelected()) return
         colorManager.selectedPrinter = appState.selectedPrinter
         colorManager.save()
-        toast.show("Printer setup complete: " + appState.selectedPrinter)
+        toast.show(strings.trKey("printerSetup.toast.complete") + appState.selectedPrinter)
         goBack()
     }
 
@@ -415,7 +416,7 @@ Page {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: 60
+        height: theme.appBarHeight
         color: theme.surface
 
         RowLayout {
@@ -450,7 +451,7 @@ Page {
             Item { Layout.fillWidth: true }
 
             ThemedButton {
-                text: "Save"
+                text: strings.trKey("common.save")
                 theme: root.theme
                 Layout.preferredWidth: root.theme.headerButtonWidth(root.width)
                 padding: 12
@@ -496,9 +497,9 @@ Page {
                     spacing: 12
 
                     Label {
-                        text: "Printer Mode"
+                        text: strings.trKey("printerSetup.printerMode")
                         color: theme.text
-                        font.pixelSize: 18
+                        font.pixelSize: theme.sectionTitleSize
                         font.weight: Font.Medium
                         Layout.alignment: Qt.AlignHCenter
                     }
@@ -596,16 +597,9 @@ Page {
 
 									Qt.callLater(root.syncUIFromAppState)
 
-									toast.show((isMultiInk ? "Multi-ink " : "") + "Nocai printer selected: " + selected)
+									toast.show((isMultiInk ? strings.trKey("printerSetup.multiInkPrefix") : "")
+                                               + strings.trKey("printerSetup.toast.nocaiSelected") + selected)
                                 }
-                            }
-
-                            Label {
-                                text: strings.trKey("printerSetup.notePrnOnly")
-                                color: theme.subtext
-                                wrapMode: Text.WordWrap
-                                Layout.fillWidth: true
-                                horizontalAlignment: Text.AlignHCenter
                             }
 
                             // Ink layout selection – only for X-36NC MultiInk printer
@@ -640,7 +634,7 @@ Page {
 										root.applyResolvedOutputProfileToBackend()
 										Qt.callLater(root.syncUIFromAppState)
 
-										toast.show("Multi-ink layout set to " + elem.label)
+										toast.show(strings.trKey("printerSetup.toast.inkLayoutSet") + elem.label)
 									}
                                 }
                             }
@@ -684,16 +678,16 @@ Page {
                                         const selected = model.get(currentIndex)
                                         appState.multiInkOutputMode = selected.value
                                         colorManager.setMultiInkOutputMode(selected.value)
-                                        toast.show("Output mode set to " + strings.trKey(selected.labelKey))
+                                        toast.show(strings.trKey("printerSetup.toast.outputModeSet") + strings.trKey(selected.labelKey))
                                     }
                                 }
 
                                 Label {
                                     text: appState.multiInkOutputMode === "direct"
                                           ? (root.isX36MultiInk()
-                                             ? "Direct mode uses the separately configured newer-model SDK."
-                                             : "Direct mode streams the standard CMYK raster to the X-33 SDK.")
-                                          : "PRN mode saves a file for testing and debugging."
+                                             ? strings.trKey("printerSetup.directMode.newSdkHelp")
+                                             : strings.trKey("printerSetup.directMode.x33Help"))
+                                          : strings.trKey("printerSetup.prnMode.help")
 	                                    color: theme.subtext
 	                                    wrapMode: Text.WordWrap
 	                                    Layout.fillWidth: true
@@ -734,9 +728,9 @@ Page {
                                         printJobOutput.supportedDuplexModes()
                                         printJobOutput.supportedColorModes()
 
-                                        toast.show("Network printer loaded: " + name)
+                                        toast.show(strings.trKey("printerSetup.toast.networkLoaded") + name)
                                     } else {
-                                        toast.show("Failed to load printer: " + name)
+                                        toast.show(strings.trKey("printerSetup.toast.networkLoadFailed") + name)
                                     }
                                 }
                             }
@@ -819,7 +813,7 @@ Page {
 
 	                                    ThemedButton {
 	                                        text: root.sdkConnectionState === "connecting"
-                                                  ? "Connecting…"
+	                                                  ? strings.trKey("printerSetup.connecting")
                                                   : (root.sdkConnectionState === "connected" ? strings.trKey("common.connected") : strings.trKey("common.connect"))
 	                                        theme: root.theme
 	                                        Layout.fillWidth: true
@@ -848,7 +842,7 @@ Page {
 
 
                                     ThemedButton {
-                                        text: "Printer Settings"
+                                        text: strings.trKey("printerSetup.printerSettings")
                                         theme: root.theme
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: 42
@@ -908,7 +902,8 @@ Page {
 						    checked: false
 						    onToggled: {
 						        printJobMultiInk.enableDeviceLink(checked)
-						        toast.show(checked ? "DeviceLink enabled (ICC bypassed)" : "DeviceLink disabled (ICC active)")
+						        toast.show(checked ? strings.trKey("printerSetup.toast.deviceLinkEnabled")
+                                                           : strings.trKey("printerSetup.toast.deviceLinkDisabled"))
 						    }
 						}
 					}
@@ -969,7 +964,7 @@ Page {
                     Label {
                         text: strings.trKey("printerSetup.iccProfiles")
                         color: theme.text
-                        font.pixelSize: 18
+                        font.pixelSize: theme.sectionTitleSize
                         font.weight: Font.Medium
                         Layout.alignment: Qt.AlignHCenter
                     }
@@ -1103,14 +1098,16 @@ Page {
 								const family = root.currentFamilyKey()
 								colorManager.setPrinterFamilyLinearizationPath(root.appState.selectedPrinter, family, "")
 								Qt.callLater(root.syncUIFromAppState)
-								toast.show("Printer linearization override cleared.")
+								toast.show(strings.trKey("printerSetup.toast.linearizationCleared"))
 							}
 						}
 					}
 
                     FileDialog {
                         id: iccUploadDialog
-						title: (iccDialogTarget === "deviceLink") ? "Select DeviceLink ICC" : "Select ICC Profile"
+						title: (iccDialogTarget === "deviceLink")
+                               ? strings.trKey("printerSetup.selectDeviceLink.title")
+                               : strings.trKey("printerSetup.selectIcc.title")
                         nameFilters: ["ICC Profiles (*.icc *.icm)", "All Files (*)"]
                         fileMode: FileDialog.OpenFile
 
@@ -1124,7 +1121,7 @@ Page {
 								printJobMultiInk.addDeviceLinkProfile(name, path)
 								deviceLinkDropdown.currentIndex = deviceLinkModel.count - 1
 								printJobMultiInk.setDefaultDeviceLinkProfile(path)
-								toast.show("DeviceLink added: " + name)
+								toast.show(strings.trKey("printerSetup.toast.deviceLinkAdded") + name)
 								return
 							}
 
@@ -1146,13 +1143,13 @@ Page {
 								colorManager.defaultInputProfile = path
 							}
 
-							toast.show("ICC added: " + name)
+							toast.show(strings.trKey("printerSetup.toast.iccAdded") + name)
 						}
                     }
 
                     FileDialog {
 						id: linearizationUploadDialog
-						title: "Select Linearization XML"
+						title: strings.trKey("printerSetup.selectLinearization.title")
 						nameFilters: ["Linearization XML (*.xml)", "All Files (*)"]
 						fileMode: FileDialog.OpenFile
 
@@ -1166,7 +1163,7 @@ Page {
 							colorManager.setPrinterFamilyLinearizationPath(root.appState.selectedPrinter, family, path)
 
 							Qt.callLater(root.syncUIFromAppState)
-							toast.show("Printer linearization override updated.")
+							toast.show(strings.trKey("printerSetup.toast.linearizationUpdated"))
 						}
 					}
                 }
@@ -1195,21 +1192,26 @@ Page {
                     Label {
                         text: strings.trKey("printerSetup.selectedPrinterDetails")
                         color: theme.text
-                        font.pixelSize: 18
+                        font.pixelSize: theme.sectionTitleSize
                         font.weight: Font.Medium
                         Layout.alignment: Qt.AlignHCenter
                     }
 
                     Rectangle { height: 1; Layout.fillWidth: true; color: theme.divider; opacity: 0.8 }
 
-                    Label { text: "Name: " + appState.selectedPrinter; color: theme.text }
-                    Label { text: "Nocai Printer: " + (appState.usingSimulatedPrinter ? "Yes" : "No"); color: theme.text }
+                    Label { text: strings.trKey("printerSetup.details.name") + appState.selectedPrinter; color: theme.text }
+                    Label {
+                        text: strings.trKey("printerSetup.details.nocaiPrinter")
+                              + (appState.usingSimulatedPrinter
+                                 ? strings.trKey("common.yes") : strings.trKey("common.no"))
+                        color: theme.text
+                    }
 
                     Label {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
                         color: theme.text
-                        text: "Supported Resolutions: " +
+                        text: strings.trKey("printerSetup.details.supportedResolutions") +
                               (appState.usingSimulatedPrinter
                                ? (nocaiPrinterCapabilities[appState.selectedPrinter] && nocaiPrinterCapabilities[appState.selectedPrinter].resolutions
                                   ? nocaiPrinterCapabilities[appState.selectedPrinter].resolutions.join(", ")
@@ -1221,7 +1223,7 @@ Page {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
                         color: theme.text
-                        text: "Media Sizes: " +
+                        text: strings.trKey("printerSetup.details.mediaSizes") +
                               (appState.usingSimulatedPrinter
                                ? (nocaiPrinterCapabilities[appState.selectedPrinter] && nocaiPrinterCapabilities[appState.selectedPrinter].mediaSizes
                                   ? nocaiPrinterCapabilities[appState.selectedPrinter].mediaSizes.join(", ")
@@ -1233,7 +1235,7 @@ Page {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
                         color: theme.text
-                        text: "Duplex Modes: " +
+                        text: strings.trKey("printerSetup.details.duplexModes") +
                               (appState.usingSimulatedPrinter
                                ? (nocaiPrinterCapabilities[appState.selectedPrinter] && nocaiPrinterCapabilities[appState.selectedPrinter].duplexModes
                                   ? nocaiPrinterCapabilities[appState.selectedPrinter].duplexModes.join(", ")
@@ -1245,7 +1247,7 @@ Page {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
                         color: theme.text
-                        text: "Color Modes: " +
+                        text: strings.trKey("printerSetup.details.colorModes") +
                               (appState.usingSimulatedPrinter
                                ? (nocaiPrinterCapabilities[appState.selectedPrinter] && nocaiPrinterCapabilities[appState.selectedPrinter].colorModes
                                   ? nocaiPrinterCapabilities[appState.selectedPrinter].colorModes.join(", ")
@@ -1259,8 +1261,10 @@ Page {
 	                        wrapMode: Text.WordWrap
 	                        color: theme.subtext
                         text: appState.usingMultiInkPrinter
-	                              ? ("Ink Layout: " + appState.multiInkInkMode + " channels")
-	                              : "Ink Layout: CMYK / CMYK+W via Nocai engine"
+	                              ? (strings.trKey("printerSetup.details.inkLayout")
+                                     + appState.multiInkInkMode
+                                     + strings.trKey("printerSetup.details.channelsSuffix"))
+	                              : strings.trKey("printerSetup.details.x33InkLayout")
 	                    }
 
 	                }

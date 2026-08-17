@@ -5,10 +5,11 @@ set -euo pipefail
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$(pwd)/.android-sdk}"
 ANDROID_CMDLINE_TOOLS_URL="${ANDROID_CMDLINE_TOOLS_URL:-https://dl.google.com/android/repository/commandlinetools-linux-14742923_latest.zip}"
 ANDROID_PLATFORM="${ANDROID_PLATFORM:-android-36}"
+ANDROID_EMULATOR_PLATFORM="${ANDROID_EMULATOR_PLATFORM:-android-35}"
 ANDROID_BUILD_TOOLS="${ANDROID_BUILD_TOOLS:-36.0.0}"
 ANDROID_NDK_VERSION="${ANDROID_NDK_VERSION:-29.0.13113456}"
-ANDROID_SYSTEM_IMAGE="${ANDROID_SYSTEM_IMAGE:-system-images;${ANDROID_PLATFORM};google_apis;x86_64}"
-ANDROID_AVD_NAME="${ANDROID_AVD_NAME:-PrintFlow_Pixel_1080p}"
+ANDROID_SYSTEM_IMAGE="${ANDROID_SYSTEM_IMAGE:-system-images;${ANDROID_EMULATOR_PLATFORM};google_apis;x86_64}"
+ANDROID_AVD_NAME="${ANDROID_AVD_NAME:-PrintFlow_Pixel_1080p_API35}"
 ANDROID_AVD_DEVICE_PREFERENCES="${ANDROID_AVD_DEVICE_PREFERENCES:-pixel,pixel_4a,pixel_3a,Nexus 5}"
 ANDROID_JDK_URL="${ANDROID_JDK_URL:-https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse}"
 
@@ -116,6 +117,27 @@ create_avd_if_missing() {
         --force
 }
 
+tune_avd_for_printflow() {
+    local config_path="${HOME}/.android/avd/${ANDROID_AVD_NAME}.avd/config.ini"
+    [[ -f "${config_path}" ]] || return
+
+    # This test box has four physical CPU cores and 16 GB RAM. Leave one core
+    # and ample memory for Linux/build tools. API 35 avoids the recurring
+    # System UI watchdog failures seen in the API 36 image on this host, while
+    # the host renderer avoids diagonal corruption in Qt Quick surfaces.
+    sed -i \
+        -e 's/^hw.cpu.ncore=.*/hw.cpu.ncore=3/' \
+        -e 's/^hw.ramSize=.*/hw.ramSize=6144/' \
+        -e 's/^vm.heapSize=.*/vm.heapSize=512M/' \
+        -e 's/^hw.gpu.enabled=.*/hw.gpu.enabled=yes/' \
+        -e 's/^hw.gpu.mode=.*/hw.gpu.mode=host/' \
+        -e 's/^hw.lcd.width=.*/hw.lcd.width=1080/' \
+        -e 's/^hw.lcd.height=.*/hw.lcd.height=1920/' \
+        -e 's/^hw.lcd.density=.*/hw.lcd.density=420/' \
+        -e 's/^showDeviceFrame=.*/showDeviceFrame=no/' \
+        "${config_path}"
+}
+
 mkdir -p "${ANDROID_SDK_ROOT}"
 install_cmdline_tools
 
@@ -138,6 +160,7 @@ set -o pipefail
     "${ANDROID_SYSTEM_IMAGE}"
 
 create_avd_if_missing
+tune_avd_for_printflow
 
 cat <<EOF
 

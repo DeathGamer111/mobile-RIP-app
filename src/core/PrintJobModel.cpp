@@ -76,7 +76,7 @@ PrintJob PrintJobModel::makeDefaultJob(const QString &name) const
     job.id = QString::number(QDateTime::currentMSecsSinceEpoch());
     job.name = name;
     job.createdAt = QDateTime::currentDateTime();
-    job.paperSize = QSize(210, 297);    // Default A4 Paper Size
+    job.paperSize = QSize(210, 297);    // Default A4 media size in millimeters.
     job.mediaHeightMm = -1.0;           // Preserve the printer's current height until enabled.
     job.resolution = QSize(720, 1440);	// RIP default DPI.
     job.offset = QPoint(0, 0);

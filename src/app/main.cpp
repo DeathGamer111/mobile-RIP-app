@@ -18,10 +18,10 @@
 #include "PrintJobOutput.h"
 #include "PrintJobCMYK.h"
 #include "PrintJobMultiInk.h"
-#if defined(Q_OS_ANDROID)
-#include "NocaiDirectPrintClient.h"
-#else
+#if !defined(Q_OS_ANDROID) || defined(RIP_ANDROID_PRINTER_BRIDGE)
 #include "PrinterServiceClient.h"
+#else
+#include "NocaiDirectPrintClient.h"
 #endif
 #include "ImageEditor.h"
 #include "ColorProfile.h"
@@ -33,7 +33,7 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 
-#if defined(Q_OS_LINUX)
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
 #include <csignal>
 #if !defined(NDEBUG)
 #include <execinfo.h>
@@ -42,7 +42,7 @@
 #endif
 
 namespace {
-#if defined(Q_OS_LINUX)
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
 volatile std::sig_atomic_t g_terminationRequested = 0;
 
 void gracefulTerminationSignalHandler(int)
@@ -62,7 +62,7 @@ void installGracefulTerminationHandlers()
 }
 #endif
 
-#if defined(Q_OS_LINUX) && !defined(NDEBUG)
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && !defined(NDEBUG)
 void crashBacktraceHandler(int signalNumber)
 {
     static constexpr char message[] =
@@ -108,7 +108,7 @@ void migrateLegacyAppData()
  */
 int main(int argc, char *argv[]) {
 
-#if defined(Q_OS_LINUX) && !defined(NDEBUG)
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && !defined(NDEBUG)
     installCrashBacktraceHandler();
 #endif
 
@@ -116,7 +116,7 @@ int main(int argc, char *argv[]) {
     QCoreApplication::setApplicationName(QStringLiteral("PrintFlow"));
     app.setDesktopFileName(QStringLiteral("PrintFlow"));
 
-#if defined(Q_OS_LINUX)
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
     installGracefulTerminationHandlers();
     QTimer terminationPoll;
     QObject::connect(&terminationPoll, &QTimer::timeout, &app, [&app]() {
@@ -165,10 +165,10 @@ int main(int argc, char *argv[]) {
     ImageEditor imageEditor;
     PrintJobOutput printJobOutput;
     PrintJobCMYK printJobCMYKOutput;
-#if defined(Q_OS_ANDROID)
-    NocaiDirectPrintClient nocaiDirectPrint;
-#else
+#if !defined(Q_OS_ANDROID) || defined(RIP_ANDROID_PRINTER_BRIDGE)
     PrinterServiceClient nocaiDirectPrint;
+#else
+    NocaiDirectPrintClient nocaiDirectPrint;
 #endif
     PrintJobMultiInk printJobMultiInk;
     ColorProfile colorProfile;

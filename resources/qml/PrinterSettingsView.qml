@@ -101,8 +101,8 @@ Page {
     function applySettings() {
         if (!canApply) {
             toast.show(nocaiDirectPrint.connected
-                       ? "Wait for the current printer operation to finish."
-                       : "Connect the printer before applying SDK settings.")
+                       ? strings.trKey("printerSettings.toast.waitForOperation")
+                       : strings.trKey("printerSettings.toast.connectBeforeApply"))
             return
         }
         pendingSettings = settingsMap()
@@ -111,7 +111,7 @@ Page {
                 "SetJobSettings", {"settings": pendingSettings})) {
             activeAction = ""
             pendingSettings = ({})
-            toast.show("Could not apply printer settings: " + nocaiDirectPrint.lastError)
+            toast.show(strings.trKey("printerSettings.toast.applyFailed") + nocaiDirectPrint.lastError)
         }
     }
 
@@ -119,7 +119,7 @@ Page {
         activeAction = "ReconnectPrinter"
         if (!nocaiDirectPrint.startReconnectPrinter(appState.sdkSelectedPrinterIndex)) {
             activeAction = ""
-            toast.show("Could not start reconnect: " + nocaiDirectPrint.lastError)
+            toast.show(strings.trKey("printerSettings.toast.reconnectStartFailed") + nocaiDirectPrint.lastError)
         }
     }
 
@@ -127,21 +127,21 @@ Page {
         activeAction = "RestartPrinterService"
         if (!nocaiDirectPrint.startRestartService(appState.sdkSelectedPrinterIndex)) {
             activeAction = ""
-            toast.show("Could not restart the printer service: " + nocaiDirectPrint.lastError)
+            toast.show(strings.trKey("printerSettings.toast.restartFailed") + nocaiDirectPrint.lastError)
         }
     }
 
     function copyDiagnosticLog() {
         const logText = nocaiDirectPrint.diagnosticLog()
         if (!logText || logText.length === 0) {
-            toast.show("No printer service log is available yet.")
+            toast.show(strings.trKey("printerSettings.toast.noLog"))
             return
         }
         clipboardBuffer.text = logText
         clipboardBuffer.selectAll()
         clipboardBuffer.copy()
         clipboardBuffer.deselect()
-        toast.show("Printer diagnostic log copied to the clipboard.")
+        toast.show(strings.trKey("printerSettings.toast.logCopied"))
     }
 
     Connections {
@@ -150,19 +150,19 @@ Page {
             if (action === "SetJobSettings") {
                 if (succeeded) {
                     root.commitSettings(root.pendingSettings)
-                    toast.show("Printer SDK settings applied.")
+                    toast.show(strings.trKey("printerSettings.toast.applied"))
                 } else {
-                    toast.show("Printer rejected the settings: " + errorMessage)
+                    toast.show(strings.trKey("printerSettings.toast.rejected") + errorMessage)
                 }
                 root.pendingSettings = ({})
             } else if (action === "ReconnectPrinter") {
                 toast.show(succeeded
-                           ? "Printer connection is ready."
-                           : "Reconnect failed: " + errorMessage)
+                           ? strings.trKey("printerSettings.toast.connectionReady")
+                           : strings.trKey("printerSettings.toast.reconnectFailed") + errorMessage)
             } else if (action === "RestartPrinterService") {
                 toast.show(succeeded
-                           ? "Printer service restarted and connected."
-                           : "Service restart failed: " + errorMessage)
+                           ? strings.trKey("printerSettings.toast.serviceRestarted")
+                           : strings.trKey("printerSettings.toast.serviceRestartFailed") + errorMessage)
             } else {
                 return
             }
@@ -183,7 +183,7 @@ Page {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: 60
+        height: theme.appBarHeight
         color: theme.surface
 
         RowLayout {
@@ -204,7 +204,7 @@ Page {
             Item { Layout.fillWidth: true }
 
             Label {
-                text: "Printer Settings"
+                text: strings.trKey("printerSettings.title")
                 color: theme.text
                 font.pixelSize: root.theme.headerTitleSize(root.width)
                 font.weight: Font.Medium
@@ -217,7 +217,9 @@ Page {
             Item { Layout.fillWidth: true }
 
             ThemedButton {
-                text: root.activeAction === "SetJobSettings" ? "Applying…" : "Apply"
+                text: root.activeAction === "SetJobSettings"
+                      ? strings.trKey("printerSettings.applying")
+                      : strings.trKey("printerSettings.apply")
                 theme: root.theme
                 Layout.preferredWidth: root.theme.headerButtonWidth(root.width)
                 padding: 12
@@ -258,14 +260,14 @@ Page {
                     spacing: 10
 
                     Label {
-                        text: "Connection Recovery"
+                        text: strings.trKey("printerSettings.connectionRecovery")
                         color: theme.text
-                        font.pixelSize: 18
+                        font.pixelSize: theme.sectionTitleSize
                         font.weight: Font.Medium
                         Layout.alignment: Qt.AlignHCenter
                     }
                     Label {
-                        text: "Use these controls only when the printer connection is not responding. Recovery operations never run in a loop."
+                        text: strings.trKey("printerSettings.connectionRecovery.help")
                         color: theme.subtext
                         wrapMode: Text.WordWrap
                         horizontalAlignment: Text.AlignHCenter
@@ -275,7 +277,8 @@ Page {
 
                     ThemedButton {
                         text: root.activeAction === "ReconnectPrinter"
-                              ? "Reconnecting…" : "Reconnect Printer"
+                              ? strings.trKey("printerSettings.reconnecting")
+                              : strings.trKey("printerSettings.reconnectPrinter")
                         theme: root.theme
                         Layout.fillWidth: true
                         Layout.preferredHeight: 42
@@ -284,7 +287,8 @@ Page {
                     }
                     ThemedButton {
                         text: root.activeAction === "RestartPrinterService"
-                              ? "Restarting Service…" : "Restart Printer Service"
+                              ? strings.trKey("printerSettings.restartingService")
+                              : strings.trKey("printerSettings.restartService")
                         theme: root.theme
                         Layout.fillWidth: true
                         Layout.preferredHeight: 42
@@ -292,7 +296,7 @@ Page {
                         onClicked: restartConfirmation.open()
                     }
                     ThemedButton {
-                        text: "Copy Diagnostic Log"
+                        text: strings.trKey("printerSettings.copyDiagnosticLog")
                         theme: root.theme
                         Layout.fillWidth: true
                         Layout.preferredHeight: 42
@@ -318,16 +322,16 @@ Page {
                     spacing: 10
 
                     Label {
-                        text: "SDK Print Settings"
+                        text: strings.trKey("printerSettings.sdkPrintSettings")
                         color: theme.text
-                        font.pixelSize: 18
+                        font.pixelSize: theme.sectionTitleSize
                         font.weight: Font.Medium
                         Layout.alignment: Qt.AlignHCenter
                     }
                     Label {
                         text: root.canApply
-                              ? "Apply sends these values to the connected printer SDK."
-                              : "Connect the printer to apply settings to the SDK."
+                              ? strings.trKey("printerSettings.sdkPrintSettings.readyHelp")
+                              : strings.trKey("printerSettings.sdkPrintSettings.connectHelp")
                         color: root.canApply ? theme.subtext : theme.warning
                         wrapMode: Text.WordWrap
                         horizontalAlignment: Text.AlignHCenter
@@ -341,27 +345,27 @@ Page {
                         columnSpacing: 12
                         rowSpacing: 8
 
-                        Label { text: "Print Direction"; color: theme.text; Layout.fillWidth: true }
+                        Label { text: strings.trKey("printerSettings.printDirection"); color: theme.text; Layout.fillWidth: true }
                         SpinBox { Layout.fillWidth: true; from: 0; to: 3; value: root.draftPrintDirection; onValueModified: root.draftPrintDirection = value }
-                        Label { text: "Print Speed"; color: theme.text; Layout.fillWidth: true }
+                        Label { text: strings.trKey("printerSettings.printSpeed"); color: theme.text; Layout.fillWidth: true }
                         SpinBox { Layout.fillWidth: true; from: 0; to: 3; value: root.draftPrintSpeed; onValueModified: root.draftPrintSpeed = value }
-                        Label { text: "WC Sequence"; color: theme.text; Layout.fillWidth: true }
+                        Label { text: strings.trKey("printerSettings.wcSequence"); color: theme.text; Layout.fillWidth: true }
                         SpinBox { Layout.fillWidth: true; from: 0; to: 1; value: root.draftWcSequence; onValueModified: root.draftWcSequence = value }
-                        Label { text: "Eclosion Grade"; color: theme.text; Layout.fillWidth: true }
+                        Label { text: strings.trKey("printerSettings.eclosionGrade"); color: theme.text; Layout.fillWidth: true }
                         SpinBox { Layout.fillWidth: true; from: 0; to: 3; value: root.draftEclosionGrade; onValueModified: root.draftEclosionGrade = value }
-                        Label { text: "Head Select"; color: theme.text; Layout.fillWidth: true }
+                        Label { text: strings.trKey("printerSettings.headSelect"); color: theme.text; Layout.fillWidth: true }
                         SpinBox { Layout.fillWidth: true; from: 0; to: 2; value: root.draftHeadSelect; onValueModified: root.draftHeadSelect = value }
-                        Label { text: "Head Voltage"; color: theme.text; Layout.fillWidth: true }
+                        Label { text: strings.trKey("printerSettings.headVoltage"); color: theme.text; Layout.fillWidth: true }
                         SpinBox { Layout.fillWidth: true; from: 400; to: 600; value: root.draftHeadVoltage; onValueModified: root.draftHeadVoltage = value }
-                        Label { text: "Print Pass"; color: theme.text; Layout.fillWidth: true }
+                        Label { text: strings.trKey("printerSettings.printPass"); color: theme.text; Layout.fillWidth: true }
                         SpinBox { Layout.fillWidth: true; from: 0; to: 255; value: root.draftPass; onValueModified: root.draftPass = value }
-                        Label { text: "VSD Mode"; color: theme.text; Layout.fillWidth: true }
+                        Label { text: strings.trKey("printerSettings.vsdMode"); color: theme.text; Layout.fillWidth: true }
                         SpinBox { Layout.fillWidth: true; from: 0; to: 65535; value: root.draftVsdMode; onValueModified: root.draftVsdMode = value }
-                        Label { text: "Strip Blank"; color: theme.text; Layout.fillWidth: true }
+                        Label { text: strings.trKey("printerSettings.stripBlank"); color: theme.text; Layout.fillWidth: true }
                         SpinBox { Layout.fillWidth: true; from: 0; to: 2; value: root.draftStripBlank; onValueModified: root.draftStripBlank = value }
-                        Label { text: "Blank Distance"; color: theme.text; Layout.fillWidth: true }
+                        Label { text: strings.trKey("printerSettings.blankDistance"); color: theme.text; Layout.fillWidth: true }
                         SpinBox { Layout.fillWidth: true; from: 0; to: 65535; value: root.draftBlankDistance; onValueModified: root.draftBlankDistance = value }
-                        Label { text: "Reset Carriage"; color: theme.text; Layout.fillWidth: true }
+                        Label { text: strings.trKey("printerSettings.resetCarriage"); color: theme.text; Layout.fillWidth: true }
                         CheckBox { checked: root.draftCarReset === 1; onToggled: root.draftCarReset = checked ? 1 : 0 }
                     }
                 }
@@ -383,9 +387,9 @@ Page {
                     spacing: 10
 
                     Label {
-                        text: "Ink Settings"
+                        text: strings.trKey("printerSettings.inkSettings")
                         color: theme.text
-                        font.pixelSize: 18
+                        font.pixelSize: theme.sectionTitleSize
                         font.weight: Font.Medium
                         Layout.alignment: Qt.AlignHCenter
                     }
@@ -396,14 +400,14 @@ Page {
                         columnSpacing: 12
                         rowSpacing: 8
 
-                        Label { text: "White Ink Percent"; color: theme.text; Layout.fillWidth: true }
-                        SpinBox { Layout.fillWidth: true; from: 0; to: 9; value: root.draftWhiteInkPercent; onValueModified: root.draftWhiteInkPercent = value }
-                        Label { text: "White Ink Pass"; color: theme.text; Layout.fillWidth: true }
-                        SpinBox { Layout.fillWidth: true; from: 0; to: 255; value: root.draftWhiteInkPassCount; onValueModified: root.draftWhiteInkPassCount = value }
-                        Label { text: "Varnish Ink Percent"; color: theme.text; Layout.fillWidth: true }
-                        SpinBox { Layout.fillWidth: true; from: 0; to: 9; value: root.draftVarnishInkPercent; onValueModified: root.draftVarnishInkPercent = value }
-                        Label { text: "Varnish Ink Pass"; color: theme.text; Layout.fillWidth: true }
-                        SpinBox { Layout.fillWidth: true; from: 0; to: 255; value: root.draftVarnishInkPassCount; onValueModified: root.draftVarnishInkPassCount = value }
+                        Label { visible: root.appState.selectedPrinterSupportsWhite; text: strings.trKey("printerSettings.whiteInkPercent"); color: theme.text; Layout.fillWidth: true }
+                        SpinBox { visible: root.appState.selectedPrinterSupportsWhite; Layout.fillWidth: true; from: 0; to: 9; value: root.draftWhiteInkPercent; onValueModified: root.draftWhiteInkPercent = value }
+                        Label { visible: root.appState.selectedPrinterSupportsWhite; text: strings.trKey("printerSettings.whiteInkPass"); color: theme.text; Layout.fillWidth: true }
+                        SpinBox { visible: root.appState.selectedPrinterSupportsWhite; Layout.fillWidth: true; from: 0; to: 255; value: root.draftWhiteInkPassCount; onValueModified: root.draftWhiteInkPassCount = value }
+                        Label { visible: root.appState.selectedPrinterSupportsVarnish; text: strings.trKey("printerSettings.varnishInkPercent"); color: theme.text; Layout.fillWidth: true }
+                        SpinBox { visible: root.appState.selectedPrinterSupportsVarnish; Layout.fillWidth: true; from: 0; to: 9; value: root.draftVarnishInkPercent; onValueModified: root.draftVarnishInkPercent = value }
+                        Label { visible: root.appState.selectedPrinterSupportsVarnish; text: strings.trKey("printerSettings.varnishInkPass"); color: theme.text; Layout.fillWidth: true }
+                        SpinBox { visible: root.appState.selectedPrinterSupportsVarnish; Layout.fillWidth: true; from: 0; to: 255; value: root.draftVarnishInkPassCount; onValueModified: root.draftVarnishInkPassCount = value }
                     }
                 }
             }
@@ -424,14 +428,14 @@ Page {
                     spacing: 10
 
                     Label {
-                        text: "Disable UV Lights"
+                        text: strings.trKey("printerSettings.disableUvLights")
                         color: theme.text
-                        font.pixelSize: 18
+                        font.pixelSize: theme.sectionTitleSize
                         font.weight: Font.Medium
                         Layout.alignment: Qt.AlignHCenter
                     }
                     Label {
-                        text: "Checked directions will not activate the corresponding UV lamp."
+                        text: strings.trKey("printerSettings.disableUvLights.help")
                         color: theme.warning
                         wrapMode: Text.WordWrap
                         horizontalAlignment: Text.AlignHCenter
@@ -444,12 +448,12 @@ Page {
                         columnSpacing: 12
                         rowSpacing: 6
 
-                        CheckBox { text: "Right lamp, R→L off"; checked: root.draftDisableUv0 === 1; onToggled: root.draftDisableUv0 = checked ? 1 : 0 }
-                        CheckBox { text: "Right lamp, L→R off"; checked: root.draftDisableUv1 === 1; onToggled: root.draftDisableUv1 = checked ? 1 : 0 }
-                        CheckBox { text: "Left lamp, R→L off"; checked: root.draftDisableUv2 === 1; onToggled: root.draftDisableUv2 = checked ? 1 : 0 }
-                        CheckBox { text: "Left lamp, L→R off"; checked: root.draftDisableUv3 === 1; onToggled: root.draftDisableUv3 = checked ? 1 : 0 }
-                        CheckBox { text: "UV lamp, R→L off"; checked: root.draftDisableUv4 === 1; onToggled: root.draftDisableUv4 = checked ? 1 : 0 }
-                        CheckBox { text: "UV lamp, L→R off"; checked: root.draftDisableUv5 === 1; onToggled: root.draftDisableUv5 = checked ? 1 : 0 }
+                        CheckBox { text: strings.trKey("printerSettings.uv.rightRtlOff"); checked: root.draftDisableUv0 === 1; onToggled: root.draftDisableUv0 = checked ? 1 : 0 }
+                        CheckBox { text: strings.trKey("printerSettings.uv.rightLtrOff"); checked: root.draftDisableUv1 === 1; onToggled: root.draftDisableUv1 = checked ? 1 : 0 }
+                        CheckBox { text: strings.trKey("printerSettings.uv.leftRtlOff"); checked: root.draftDisableUv2 === 1; onToggled: root.draftDisableUv2 = checked ? 1 : 0 }
+                        CheckBox { text: strings.trKey("printerSettings.uv.leftLtrOff"); checked: root.draftDisableUv3 === 1; onToggled: root.draftDisableUv3 = checked ? 1 : 0 }
+                        CheckBox { text: strings.trKey("printerSettings.uv.centerRtlOff"); checked: root.draftDisableUv4 === 1; onToggled: root.draftDisableUv4 = checked ? 1 : 0 }
+                        CheckBox { text: strings.trKey("printerSettings.uv.centerLtrOff"); checked: root.draftDisableUv5 === 1; onToggled: root.draftDisableUv5 = checked ? 1 : 0 }
                     }
                 }
             }
@@ -463,13 +467,13 @@ Page {
         parent: Overlay.overlay
         anchors.centerIn: parent
         modal: true
-        title: "Restart Printer Service?"
+        title: strings.trKey("printerSettings.restartConfirm.title")
         standardButtons: Dialog.Ok | Dialog.Cancel
         width: Math.min(420, parent ? parent.width - 32 : 420)
 
         Label {
             width: parent.width
-            text: "This closes the current SDK session and starts a new service. Use it only when Reconnect Printer does not recover the connection. The printer may still require a power cycle if it retained a stale hardware session."
+            text: strings.trKey("printerSettings.restartConfirm.message")
             color: theme.text
             wrapMode: Text.WordWrap
         }

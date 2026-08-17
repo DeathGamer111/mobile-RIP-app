@@ -20,10 +20,40 @@ Item {
     property var imageMeta: ({})                           // Metadata from ImageLoader
     property string selectedInputICC: ""                   // When using "Custom ICC" conversion
     property string selectedOutputICC: ""
-    property string printedSizeDisplay: "Printed size unavailable"
+    property string printedSizeDisplay: strings.trKey("jobDetails.printedSize.unavailable")
     property bool loadingInputICC: true
     property bool waitingForImageImport: false
     property bool syncingOffsetControls: false
+    property var mediaSizeOptions: (strings.language, [
+        { label: strings.trKey("media.a0"), widthMm: 841, heightMm: 1189, cupsName: "A0" },
+        { label: strings.trKey("media.a1"), widthMm: 594, heightMm: 841, cupsName: "A1" },
+        { label: strings.trKey("media.a2"), widthMm: 420, heightMm: 594, cupsName: "A2" },
+        { label: strings.trKey("media.a3"), widthMm: 297, heightMm: 420, cupsName: "A3" },
+        { label: strings.trKey("media.a4"), widthMm: 210, heightMm: 297, cupsName: "A4" },
+        { label: strings.trKey("media.a5"), widthMm: 148, heightMm: 210, cupsName: "A5" },
+        { label: strings.trKey("media.a6"), widthMm: 105, heightMm: 148, cupsName: "A6" },
+        { label: strings.trKey("media.letter"), widthMm: 216, heightMm: 279, cupsName: "Letter" },
+        { label: strings.trKey("media.legal"), widthMm: 216, heightMm: 356, cupsName: "Legal" },
+        { label: strings.trKey("media.tabloid"), widthMm: 279, heightMm: 432, cupsName: "Tabloid" },
+        { label: strings.trKey("media.sign12x18"), widthMm: 305, heightMm: 457, cupsName: "12x18" },
+        { label: strings.trKey("media.sign18x24"), widthMm: 457, heightMm: 610, cupsName: "18x24" },
+        { label: strings.trKey("media.coroplast24x36"), widthMm: 610, heightMm: 914, cupsName: "24x36" },
+        { label: strings.trKey("media.sign24x48"), widthMm: 610, heightMm: 1219, cupsName: "24x48" },
+        { label: strings.trKey("media.sign32x48"), widthMm: 813, heightMm: 1219, cupsName: "32x48" },
+        { label: strings.trKey("media.custom"), widthMm: -1, heightMm: -1, cupsName: "Custom" }
+    ])
+    property var whiteModeOptions: (strings.language, [
+        { label: strings.trKey("color.option.off"), value: "Off" },
+        { label: strings.trKey("color.option.autoUnderbase"), value: "Auto Underbase" },
+        { label: strings.trKey("color.option.flood"), value: "Flood" },
+        { label: strings.trKey("color.option.plate"), value: "Plate" }
+    ])
+    property var varnishModeOptions: (strings.language, [
+        { label: strings.trKey("color.option.off"), value: "Off" },
+        { label: strings.trKey("color.option.overPrintedArea"), value: "Over Printed Area" },
+        { label: strings.trKey("color.option.flood"), value: "Flood" },
+        { label: strings.trKey("color.option.plate"), value: "Plate" }
+    ])
 
     width: parent ? parent.width : 450
     height: parent ? parent.height : 600
@@ -79,7 +109,6 @@ Item {
         if (appState.selectedPrinter.length > 0) {
             safeSelectFirstSupported(profileBox, printJobOutput.supportedColorModes())
             safeSelectFirstSupported(paperSizeBox, printJobOutput.supportedMediaSizes())
-            // TODO: Add more fields as neccessary
 		}
     }
     
@@ -111,15 +140,23 @@ Item {
     }
 
 	
-    // Force the <Image> to reload its source; handy after conversions.
+    // Reload same-path imports without assigning previewImage.source directly;
+    // direct assignment would detach its binding from imagePath.
     function refreshPreview() {
-        const temp = previewImage.source
-        previewImage.source = ""
-        previewImage.source = temp
+        const currentPath = imagePath
+        imagePath = ""
+        Qt.callLater(function() { imagePath = currentPath })
     }
 
     function applyJobImagePath(path) {
         jobData.imagePath = path
+
+        // Replacing a PDF creates a new raster preview; discard the previous
+        // temporary file before tracking the replacement.
+        if (tempPreviewPath !== "") {
+            imageLoader.deleteTemporaryFile(tempPreviewPath)
+            tempPreviewPath = ""
+        }
 
         if (path.toLowerCase().endsWith(".pdf")) {
             const previewPath = imageLoader.renderPdfToPreviewImage(path)
@@ -165,17 +202,13 @@ Item {
         if (!supportedList || supportedList.length === 0)
             return
         for (let i = 0; i < comboBox.count; i++) {
-            if (supportedList.indexOf(comboBox.model[i]) !== -1) {
+            const item = comboBox.model[i]
+            const capabilityName = item && item.cupsName ? item.cupsName : item
+            if (supportedList.indexOf(capabilityName) !== -1) {
                 comboBox.currentIndex = i
                 break
             }
         }
-    }
-
-	
-    // Update job's persisted image path.
-    function updateImagePath(path) {
-        jobData.imagePath = path
     }
 
     Connections {
@@ -200,28 +233,34 @@ Item {
     }
 
 
-    // Map jobData.paperSize to the Paper Size combo index.
-    function paperSizeIndexFromSize(size) {
-        if (size.width === 210 && size.height === 297) return 0; // A4
-        if (size.width === 216 && size.height === 279) return 1; // Letter
-        if (size.width === 279 && size.height === 432) return 2; // Tabloid
-        return 3; // Custom
+    // paperSize remains the persisted field name for compatibility; the UI
+    // consistently presents it as media size.
+    function mediaSizeIndexFromSize(size) {
+        for (let i = 0; i < mediaSizeOptions.length; ++i) {
+            const option = mediaSizeOptions[i]
+            if (option.widthMm === size.width && option.heightMm === size.height)
+                return i
+        }
+        return mediaSizeOptions.length - 1
     }
 
-	
-    // Apply paper size selection back into jobData (handles Custom).
-    function updatePaperSize() {
-        if (paperSizeBox.currentText === "A4") {
-            jobData.paperSize = Qt.size(210, 297)
+    function optionIndexForValue(options, value) {
+        for (let i = 0; i < options.length; ++i) {
+            if (options[i].value === value)
+                return i
         }
-        else if (paperSizeBox.currentText === "Letter") {
-            jobData.paperSize = Qt.size(216, 279)
-        }
-        else if (paperSizeBox.currentText === "Tabloid") {
-            jobData.paperSize = Qt.size(279, 432)
-        }
-        else if (paperSizeBox.currentText === "Custom") {
+        return 0
+    }
+
+    // Apply the selected media dimensions back into the legacy job field.
+    function updateMediaSize() {
+        if (paperSizeBox.currentIndex < 0)
+            return
+        const option = mediaSizeOptions[paperSizeBox.currentIndex]
+        if (option.widthMm < 0) {
             jobData.paperSize = Qt.size(customWidth.value, customHeight.value)
+        } else {
+            jobData.paperSize = Qt.size(option.widthMm, option.heightMm)
         }
     }
 
@@ -305,11 +344,10 @@ Item {
 		    const printedWmm = ((wPx * 25.4) / effectiveDpi).toFixed(1)
 		    const printedHmm = ((hPx * 25.4) / effectiveDpi).toFixed(1)
 
-		    // Still show the selected output DPI so user knows the "detail mode"
-		    const dpiText = resolutionComboBox.currentText || ""
-		    printedSizeDisplay = `Approx. Printed Size: ${printedWmm} mm × ${printedHmm} mm`
+		    printedSizeDisplay = strings.trKey("jobDetails.printedSize.prefix")
+                                 + printedWmm + " mm × " + printedHmm + " mm"
 		} else {
-		    printedSizeDisplay = "Printed size unavailable"
+		    printedSizeDisplay = strings.trKey("jobDetails.printedSize.unavailable")
 		}
 	}
 
@@ -336,8 +374,11 @@ Item {
 
 
     // Persist white/varnish/profile selections.
-    function updateWhiteStrategy() { jobData.whiteStrategy = whiteBox.currentText }
-    function updateVarnishType() { jobData.varnishType = varnishBox.currentText }
+    function selectedOptionValue(comboBox, options) {
+        return comboBox.currentIndex >= 0 ? options[comboBox.currentIndex].value : ""
+    }
+    function updateWhiteStrategy() { jobData.whiteStrategy = selectedOptionValue(whiteBox, whiteModeOptions) }
+    function updateVarnishType() { jobData.varnishType = selectedOptionValue(varnishBox, varnishModeOptions) }
     function updateColorProfile() { jobData.colorProfile = profileBox.currentText }
 
 	// Update White and Varnish Plate UI after loading in plate image
@@ -366,7 +407,7 @@ Item {
 		Rectangle {
 			id: headerBar
 			Layout.fillWidth: true
-			height: 60
+			height: theme.appBarHeight
 			color: theme.surface
 
 			RowLayout {
@@ -426,8 +467,8 @@ Item {
 				                    : Qt.size(720, usingMultiInk ? 1200 : 1440)
 				            })(),
 				            offset: Qt.point(offsetXSpin.value, offsetYSpin.value),
-				            whiteStrategy: whiteBox.currentText,
-				            varnishType: varnishBox.currentText,
+					            whiteStrategy: selectedOptionValue(whiteBox, whiteModeOptions),
+					            varnishType: selectedOptionValue(varnishBox, varnishModeOptions),
 				            colorProfile: profileBox.currentText,
 		                    whitePlatePath: whitePlatePath,
 					        varnishPlatePath: varnishPlatePath
@@ -480,14 +521,14 @@ Item {
 			Pane {
 			width: theme.boundedWidth(parent.width, 450)
 			anchors.horizontalCenter: parent.horizontalCenter
-			topPadding: 20
+			topPadding: theme.mobile ? theme.spaceMd : 20
 			leftPadding: theme.panePadding
 			rightPadding: theme.panePadding
-			bottomPadding: 20
+			bottomPadding: theme.mobile ? theme.spaceMd : 20
 
 			background: Rectangle {
 				color: theme.surface
-				radius: 12
+				radius: theme.cardRadius
 				border.width: 1
 				border.color: theme.divider
 			}
@@ -495,7 +536,7 @@ Item {
                     ColumnLayout {
 			id: columnContent
 			width: parent.width
-			spacing: 16
+			spacing: theme.mobile ? theme.spaceMd : 16
 
 			// Job name label
 			Label {
@@ -514,7 +555,7 @@ Item {
             Rectangle {
 				id: imageContainer
 			    Layout.fillWidth: true
-			    height: 260
+			    height: theme.mobile ? 180 : 260
 				color: theme.surface
 			    border.color: theme.divider
 			    radius: 10
@@ -548,7 +589,7 @@ Item {
 
 			// Artwork actions: load, open editor, open imposition tool.
             GridLayout {
-                columns: theme.gridColumns(width, 3, 118)
+                columns: theme.actionColumns(width, 3, 118)
                 rowSpacing: 10
                 columnSpacing: 12
                 Layout.fillWidth: true
@@ -624,7 +665,7 @@ Item {
 			// Printer-related settings: media, DPI, offsets, white/varnish.
             Label {
                 text: strings.trKey("jobDetails.printerSettings")
-                font.pixelSize: 18
+                font.pixelSize: theme.sectionTitleSize
                 horizontalAlignment: Text.AlignHCenter
                 Layout.alignment: Qt.AlignHCenter
             }
@@ -643,26 +684,31 @@ Item {
                     width: parent.width
                     spacing: 10
 
-                    Label { text: strings.trKey("jobDetails.paperSize") }
+                    Label { text: strings.trKey("jobDetails.mediaSize") }
                     ComboBox {
                         id: paperSizeBox
                         Layout.fillWidth: true
                         Layout.minimumWidth: 0
                         Layout.maximumWidth: parent.width
-                        model: ["A4", "Letter", "Tabloid", "Custom"]
-                        currentIndex: paperSizeIndexFromSize(jobData.paperSize)
-                        onCurrentTextChanged: updatePaperSize()
+                        model: root.mediaSizeOptions
+                        textRole: "label"
+                        currentIndex: mediaSizeIndexFromSize(jobData.paperSize)
+                        onActivated: updateMediaSize()
 
-                        enabled: appState.selectedPrinter.length === 0 || isSupported(currentText, printJobOutput.supportedMediaSizes())
+                        enabled: appState.usingSimulatedPrinter
+                                 || appState.selectedPrinter.length === 0
+                                 || currentIndex < 0
+                                 || isSupported(root.mediaSizeOptions[currentIndex].cupsName,
+                                                printJobOutput.supportedMediaSizes())
                     }
 								
 				// Custom size widgets appear only when needed.
                 ColumnLayout {
-                    visible: paperSizeBox.currentText === "Custom"
+                    visible: paperSizeBox.currentIndex === root.mediaSizeOptions.length - 1
                     Layout.fillWidth: true
                     spacing: 8
 
-                    Label { text: strings.trKey("jobDetails.customPaperSize") }
+                    Label { text: strings.trKey("jobDetails.customMediaSize") }
 
                     RowLayout {
                         spacing: 8
@@ -810,13 +856,14 @@ Item {
 					Layout.fillWidth: true
 					Layout.minimumWidth: 0
 					Layout.maximumWidth: parent.width
-					model: ["Off", "Auto Underbase", "Flood", "Plate"]
-					currentIndex: Math.max(0, model.indexOf(jobData.whiteStrategy))
-					onCurrentTextChanged: updateWhiteStrategy()
+					model: root.whiteModeOptions
+                    textRole: "label"
+					currentIndex: optionIndexForValue(root.whiteModeOptions, jobData.whiteStrategy)
+					onActivated: updateWhiteStrategy()
 				}
 				
 				ColumnLayout {
-					visible: whiteBox.currentText === "Plate"
+					visible: selectedOptionValue(whiteBox, root.whiteModeOptions) === "Plate"
 					Layout.fillWidth: true
 					spacing: 8
 
@@ -838,7 +885,7 @@ Item {
 						}
 
 						ThemedButton {
-							text: "Browse"
+							text: strings.trKey("common.browse")
 							theme: root.theme
 							onClicked: whitePlateDialog.open()
 						}
@@ -846,7 +893,7 @@ Item {
 				}
 				
 				Text {
-					visible: whiteBox.currentText === "Auto Underbase"
+					visible: selectedOptionValue(whiteBox, root.whiteModeOptions) === "Auto Underbase"
 					text: strings.trKey("jobDetails.modeDefaults")
 					color: theme.subtext
 					wrapMode: Text.Wrap
@@ -870,13 +917,14 @@ Item {
 					Layout.fillWidth: true
 					Layout.minimumWidth: 0
 					Layout.maximumWidth: parent.width
-					model: ["Off", "Over Printed Area", "Flood", "Plate"]
-					currentIndex: Math.max(0, model.indexOf(jobData.varnishType))
-					onCurrentTextChanged: updateVarnishType()
+					model: root.varnishModeOptions
+                    textRole: "label"
+					currentIndex: optionIndexForValue(root.varnishModeOptions, jobData.varnishType)
+					onActivated: updateVarnishType()
 				}
 				
 				ColumnLayout {
-					visible: varnishBox.currentText === "Plate"
+					visible: selectedOptionValue(varnishBox, root.varnishModeOptions) === "Plate"
 					Layout.fillWidth: true
 					spacing: 8
 
@@ -898,7 +946,7 @@ Item {
 						}
 
 						ThemedButton {
-							text: "Browse"
+							text: strings.trKey("common.browse")
 							theme: root.theme
 							onClicked: varnishPlateDialog.open()
 						}
@@ -906,7 +954,7 @@ Item {
 				}
 				
 				Text {
-					visible: varnishBox.currentText === "Over Printed Area"
+					visible: selectedOptionValue(varnishBox, root.varnishModeOptions) === "Over Printed Area"
 					text: strings.trKey("jobDetails.modeDefaults")
 					color: theme.subtext
 					wrapMode: Text.Wrap
@@ -1009,11 +1057,9 @@ Item {
 		                onAccepted: {
 		                    if (loadingInputICC) {
 		                        selectedInputICC = file
-		                      //  colorProfile.setInputICC(file) // This only applies when using LittleCMS, we use Image Magick instead
-		                    } else {
-		                        selectedOutputICC = file
-		                      //  colorProfile.setOutputICC(file) // This only applies when using LittleCMS, we use Image Magick instead
-		                    }
+			                    } else {
+			                        selectedOutputICC = file
+			                    }
 		                }
 		            }
 		        }
@@ -1037,22 +1083,22 @@ Item {
                                 spacing: 4
 
                                 // Always shown if present
-                                Text { text: "Name: " + imageMeta.name; color: theme.text; visible: imageMeta.name !== undefined }
-                                Text { text: "Size: " + imageMeta.size + " bytes"; color: theme.text; visible: imageMeta.size !== undefined }
-                                Text { text: "Dimensions: " + imageMeta.width + " x " + imageMeta.height; color: theme.text; visible: imageMeta.width !== undefined && imageMeta.height !== undefined }
-                                Text { text: "Channels: " + imageMeta.channels; color: theme.text; visible: imageMeta.channels !== undefined }
-                                Text { text: "Format: " + imageMeta.format; color: theme.text; visible: imageMeta.format !== undefined }
-                                Text { text: "DPI: " + imageMeta.dpi; color: theme.text; visible: imageMeta.dpi !== undefined }
-                                Text { text: "Color Profile: " + imageMeta.colorProfile; color: theme.text; visible: imageMeta.colorProfile !== undefined }
+                                Text { text: strings.trKey("jobDetails.metadata.name") + imageMeta.name; color: theme.text; visible: imageMeta.name !== undefined }
+                                Text { text: strings.trKey("jobDetails.metadata.size") + imageMeta.size + strings.trKey("jobDetails.metadata.bytesSuffix"); color: theme.text; visible: imageMeta.size !== undefined }
+                                Text { text: strings.trKey("jobDetails.metadata.dimensions") + imageMeta.width + " x " + imageMeta.height; color: theme.text; visible: imageMeta.width !== undefined && imageMeta.height !== undefined }
+                                Text { text: strings.trKey("jobDetails.metadata.channels") + imageMeta.channels; color: theme.text; visible: imageMeta.channels !== undefined }
+                                Text { text: strings.trKey("jobDetails.metadata.format") + imageMeta.format; color: theme.text; visible: imageMeta.format !== undefined }
+                                Text { text: strings.trKey("jobDetails.metadata.dpi") + imageMeta.dpi; color: theme.text; visible: imageMeta.dpi !== undefined }
+                                Text { text: strings.trKey("jobDetails.metadata.colorProfile") + imageMeta.colorProfile; color: theme.text; visible: imageMeta.colorProfile !== undefined }
 
                                 // SVG
-                                Text { text: "SVG Size: " + imageMeta.svgWidth + " x " + imageMeta.svgHeight; color: theme.text; visible: imageMeta.svgWidth !== undefined && imageMeta.svgHeight !== undefined }
-                                Text { text: "SVG Title: " + imageMeta.svgTitle; color: theme.text; visible: imageMeta.svgTitle !== undefined }
+                                Text { text: strings.trKey("jobDetails.metadata.svgSize") + imageMeta.svgWidth + " x " + imageMeta.svgHeight; color: theme.text; visible: imageMeta.svgWidth !== undefined && imageMeta.svgHeight !== undefined }
+                                Text { text: strings.trKey("jobDetails.metadata.svgTitle") + imageMeta.svgTitle; color: theme.text; visible: imageMeta.svgTitle !== undefined }
 
                                 // PDF
-                                Text { text: "PDF Version: " + imageMeta.pdfVersion; color: theme.text; visible: imageMeta.pdfVersion !== undefined }
-                                Text { text: "PDF Title: " + imageMeta.pdfTitle; color: theme.text; visible: imageMeta.pdfTitle !== undefined }
-                                Text { text: "Page Count: " + imageMeta.pageCount; color: theme.text; visible: imageMeta.pageCount !== undefined }
+                                Text { text: strings.trKey("jobDetails.metadata.pdfVersion") + imageMeta.pdfVersion; color: theme.text; visible: imageMeta.pdfVersion !== undefined }
+                                Text { text: strings.trKey("jobDetails.metadata.pdfTitle") + imageMeta.pdfTitle; color: theme.text; visible: imageMeta.pdfTitle !== undefined }
+                                Text { text: strings.trKey("jobDetails.metadata.pageCount") + imageMeta.pageCount; color: theme.text; visible: imageMeta.pageCount !== undefined }
                             }
                         }
                     }

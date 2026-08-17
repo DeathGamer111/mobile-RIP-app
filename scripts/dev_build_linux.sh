@@ -2,12 +2,17 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
+
 TARGET_NAME="PrintFlow"
 BUILD_DIR="${BUILD_DIR:-build}"
 MASK_SOURCE_DIR="resources/assets/blue_noise_mask_512_12000"
 RUNTIME_DIR="${HOME}/.local/share/PrintFlow/runtime_assets"
 RIP_THEME="${RIP_THEME:-default}"
 RIP_THEME_FILE="${RIP_THEME_FILE:-}"
+DIRECT_PRINT_SDK_ROOT="${DIRECT_PRINT_SDK_ROOT:-${REPO_ROOT}/third_party/nocai/direct-print}"
 
 STEP=0
 TOTAL_STEPS=8
@@ -135,6 +140,11 @@ for candidate in libmagick++-6.q16-dev libmagick++-7.q16-dev libmagick++-dev; do
 done
 [[ -n "${IMAGEMAGICK_DEV_PACKAGE}" ]] || fail "No supported ImageMagick Magick++ development package is available."
 
+QT6_SVG_PLUGIN_PACKAGES=()
+if apt_package_available qt6-svg-plugins; then
+    QT6_SVG_PLUGIN_PACKAGES+=(qt6-svg-plugins)
+fi
+
 sudo apt-get install -y --no-remove \
     cmake g++ qt6-base-dev qt6-base-private-dev qt6-declarative-dev \
     qt6-declarative-dev-tools qt6-tools-dev qt6-tools-dev-tools \
@@ -148,7 +158,8 @@ sudo apt-get install -y --no-remove \
     qml6-module-qtquick-dialogs libqt6widgets6 qml6-module-qtpositioning \
     qml6-module-qtcore qml6-module-qtquick-window qml-module-qtquick-shapes \
     qml6-module-qtquick-shapes qt5-qmltooling-plugins qt6-image-formats-plugins \
-    qt6-svg-plugins libqt6widgets6 libqt6svg6 libqt6svgwidgets6 qml6-module-qtqml-workerscript \
+    "${QT6_SVG_PLUGIN_PACKAGES[@]}" libqt6widgets6 libqt6svg6 libqt6svgwidgets6 \
+    qml6-module-qtqml-workerscript \
     qml6-module-qtquick-templates libqt6test6 \
     libcap2-bin network-manager iproute2
 
@@ -172,8 +183,10 @@ info "Build directory: ${BUILD_DIR}"
 step "Configuring CMake"
 mapfile -t THEME_CMAKE_ARGS < <(theme_cmake_args)
 info "Theme: ${RIP_THEME}${RIP_THEME_FILE:+ from ${RIP_THEME_FILE}}"
+info "Direct-print SDK: ${DIRECT_PRINT_SDK_ROOT}"
 cmake -S . -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Debug \
     -DBUILD_TESTING=OFF \
+    -DDIRECT_PRINT_SDK_ROOT="${DIRECT_PRINT_SDK_ROOT}" \
     -DDIRECT_PRINT_SDK_STRICT=ON "${THEME_CMAKE_ARGS[@]}"
 
 step "Building ${TARGET_NAME}"

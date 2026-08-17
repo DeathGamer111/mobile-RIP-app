@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QLockFile>
 #include <QLocalSocket>
+#include <QHostAddress>
 #include <QStandardPaths>
 #include <QTimer>
 
@@ -87,6 +88,7 @@ int main(int argc, char* argv[])
 
     QString socketName = PrintFlowPrinterServiceProtocol::defaultSocketName();
     QString controlCommand;
+    quint16 bridgePort = 0;
     for (int index = 1; index < arguments.size(); ++index) {
         if (arguments.at(index) == QStringLiteral("--socket") &&
             index + 1 < arguments.size()) {
@@ -95,6 +97,15 @@ int main(int argc, char* argv[])
             controlCommand = QStringLiteral("shutdown");
         } else if (arguments.at(index) == QStringLiteral("--ping")) {
             controlCommand = QStringLiteral("ping");
+        } else if (arguments.at(index) == QStringLiteral("--android-bridge-port") &&
+                   index + 1 < arguments.size()) {
+            bool ok = false;
+            const uint value = arguments.at(++index).toUInt(&ok);
+            if (!ok || value == 0 || value > 65535) {
+                qCritical("Invalid --android-bridge-port value");
+                return 2;
+            }
+            bridgePort = quint16(value);
         }
     }
     if (!controlCommand.isEmpty())
@@ -128,7 +139,17 @@ int main(int argc, char* argv[])
                   qPrintable(error));
         return 2;
     }
+    if (bridgePort != 0 &&
+        !server.listenTcp(QHostAddress::LocalHost, bridgePort, &error)) {
+        qCritical("PrintFlow Android bridge could not listen: %s",
+                  qPrintable(error));
+        return 2;
+    }
     qInfo("PrintFlow printer service listening on %s",
           qPrintable(server.socketName()));
+    if (bridgePort != 0) {
+        qInfo("PrintFlow Android bridge listening on 127.0.0.1:%u",
+              unsigned(server.tcpPort()));
+    }
     return app.exec();
 }
