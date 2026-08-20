@@ -1,4 +1,5 @@
 #include "NocaiPrnWriter.h"
+#include "RasterSpool.h"
 
 #include <QByteArray>
 #include <QFile>
@@ -36,6 +37,8 @@ private slots:
     void writesStandardCmykPrn();
     void writesStandardX33WhitePrn();
     void writesMultiInkPrn();
+    void writesSpoolIdenticallyToLegacyRaster();
+    void writesEveryMultiInkSpoolIdenticallyToLegacyRaster();
 };
 
 void NocaiPrnWriterTest::packs2BppRows()
@@ -189,6 +192,142 @@ void NocaiPrnWriterTest::writesMultiInkPrn()
     QCOMPARE(static_cast<unsigned char>(multiInkData[65]), static_cast<unsigned char>('M'));
     QCOMPARE(static_cast<unsigned char>(multiInkData[66]), static_cast<unsigned char>('C'));
     QCOMPARE(static_cast<unsigned char>(multiInkData[67]), static_cast<unsigned char>('K'));
+}
+
+void NocaiPrnWriterTest::writesSpoolIdenticallyToLegacyRaster()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    constexpr int width = 9;
+    constexpr int height = 2;
+    constexpr int bytesPerLine = 4;
+    std::vector<std::vector<std::vector<uint8_t>>> channels(5);
+    for (int channel = 0; channel < int(channels.size()); ++channel) {
+        for (int row = 0; row < height; ++row) {
+            channels[size_t(channel)].push_back(
+                std::vector<uint8_t>(bytesPerLine,
+                                     uint8_t(channel * 16 + row + 1)));
+        }
+    }
+    const std::vector<int> physicalOrder = {2, 1, 0, 3, 4, 4};
+    const QString legacyPath = tempDir.filePath(QStringLiteral("legacy.prn"));
+    QVERIFY(NocaiPrnWriter::writeStandardX33Prn(
+        channels, physicalOrder, width, height, 720, 1440,
+        QUrl::fromLocalFile(legacyPath).toString()));
+
+    DirectPrintSpool metadata;
+    metadata.logicalChannelCount = int(channels.size());
+    metadata.channelOrder = physicalOrder;
+    metadata.width = width;
+    metadata.height = height;
+    metadata.xdpi = 720;
+    metadata.ydpi = 1440;
+    metadata.bytesPerLine = bytesPerLine;
+    metadata.format = DirectPrintRasterFormat::NocaiX33Standard;
+    metadata.canonicalHeader = NocaiPrnWriter::makeStandardX33Header(
+        width, height, 720, 1440, bytesPerLine, int(physicalOrder.size()));
+
+    PrintFlowRasterSpool::Writer writer;
+    QString error;
+    QVERIFY2(writer.create(tempDir.path(), metadata, &error), qPrintable(error));
+    for (int channel = 0; channel < int(channels.size()); ++channel) {
+        for (int row = 0; row < height; ++row) {
+            const auto& line = channels[size_t(channel)][size_t(row)];
+            QVERIFY2(writer.writeLine(channel, row, line.data(),
+                                      qsizetype(line.size()), &error),
+                     qPrintable(error));
+        }
+    }
+    DirectPrintSpool spool;
+    QVERIFY2(writer.finalize(&spool, &error), qPrintable(error));
+
+    const QString spoolPath = tempDir.filePath(QStringLiteral("spool.prn"));
+    QVERIFY(NocaiPrnWriter::writeStandardX33Prn(
+        spool, spoolPath));
+    QByteArray legacyBytes;
+    QByteArray spoolBytes;
+    QVERIFY(readFile(legacyPath, legacyBytes));
+    QVERIFY(readFile(spoolPath, spoolBytes));
+    QCOMPARE(spoolBytes, legacyBytes);
+    PrintFlowRasterSpool::remove(spool);
+}
+
+void NocaiPrnWriterTest::writesEveryMultiInkSpoolIdenticallyToLegacyRaster()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    struct Fixture {
+        NocaiPrnWriter::MultiInkMode mode;
+        std::vector<int> physicalOrder;
+    };
+    const std::vector<Fixture> fixtures = {
+        {NocaiPrnWriter::MultiInkMode::FourColorYMCK, {2, 1, 0, 3}},
+        {NocaiPrnWriter::MultiInkMode::FiveColorYMCKW, {2, 1, 0, 3, 4}},
+        {NocaiPrnWriter::MultiInkMode::SixColorYMCKLmLc, {2, 1, 0, 3, 4, 5}},
+        {NocaiPrnWriter::MultiInkMode::SevenColorYMCKLmLcW, {2, 1, 0, 3, 4, 5, 6}},
+        {NocaiPrnWriter::MultiInkMode::EightColorYMCKLmLcLkLLk, {2, 1, 0, 3, 5, 4, 6, 7}},
+        {NocaiPrnWriter::MultiInkMode::TenColorYMCKLmLcLkLLkWV, {2, 1, 0, 3, 5, 4, 6, 7, 8, 9}},
+    };
+    constexpr int width = 13;
+    constexpr int height = 3;
+    constexpr int bytesPerLine = 4;
+
+    for (size_t fixtureIndex = 0; fixtureIndex < fixtures.size(); ++fixtureIndex) {
+        const Fixture& fixture = fixtures[fixtureIndex];
+        std::vector<std::vector<std::vector<uint8_t>>> channels(
+            fixture.physicalOrder.size());
+        for (int channel = 0; channel < int(channels.size()); ++channel) {
+            for (int row = 0; row < height; ++row) {
+                channels[size_t(channel)].push_back(
+                    std::vector<uint8_t>(bytesPerLine,
+                        uint8_t(1 + fixtureIndex * 23 + size_t(channel) * 3 + row)));
+            }
+        }
+
+        const QString legacyPath = tempDir.filePath(
+            QStringLiteral("multi-legacy-%1.prn").arg(fixtureIndex));
+        QVERIFY(NocaiPrnWriter::writeMultiInkPrn(
+            channels, fixture.physicalOrder, fixture.mode,
+            width, height, 720, 1200, bytesPerLine,
+            QUrl::fromLocalFile(legacyPath).toString()));
+
+        DirectPrintSpool metadata;
+        metadata.logicalChannelCount = int(channels.size());
+        metadata.channelOrder = fixture.physicalOrder;
+        metadata.width = width;
+        metadata.height = height;
+        metadata.xdpi = 720;
+        metadata.ydpi = 1200;
+        metadata.bytesPerLine = bytesPerLine;
+        metadata.format = DirectPrintRasterFormat::NocaiMultiInk;
+
+        PrintFlowRasterSpool::Writer writer;
+        QString error;
+        QVERIFY2(writer.create(tempDir.path(), metadata, &error), qPrintable(error));
+        for (int channel = 0; channel < int(channels.size()); ++channel) {
+            for (int row = 0; row < height; ++row) {
+                const auto& line = channels[size_t(channel)][size_t(row)];
+                QVERIFY2(writer.writeLine(channel, row, line.data(),
+                                          qsizetype(line.size()), &error),
+                         qPrintable(error));
+            }
+        }
+        DirectPrintSpool spool;
+        QVERIFY2(writer.finalize(&spool, &error), qPrintable(error));
+
+        const QString spoolPath = tempDir.filePath(
+            QStringLiteral("multi-spool-%1.prn").arg(fixtureIndex));
+        QVERIFY(NocaiPrnWriter::writeMultiInkPrn(
+            spool, fixture.mode, spoolPath));
+        QByteArray legacyBytes;
+        QByteArray spoolBytes;
+        QVERIFY(readFile(legacyPath, legacyBytes));
+        QVERIFY(readFile(spoolPath, spoolBytes));
+        QCOMPARE(spoolBytes, legacyBytes);
+        PrintFlowRasterSpool::remove(spool);
+    }
 }
 
 QTEST_GUILESS_MAIN(NocaiPrnWriterTest)

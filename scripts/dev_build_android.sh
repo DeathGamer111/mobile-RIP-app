@@ -13,7 +13,10 @@ GRADLE_USER_HOME="${GRADLE_USER_HOME:-$(pwd)/.gradle}"
 RIP_THEME="${RIP_THEME:-default}"
 RIP_THEME_FILE="${RIP_THEME_FILE:-}"
 RIP_ANDROID_ENABLE_RIP_PROCESSING="${RIP_ANDROID_ENABLE_RIP_PROCESSING:-ON}"
-RIP_EMBED_BLUE_NOISE_MASKS="${RIP_EMBED_BLUE_NOISE_MASKS:-OFF}"
+# Android has no separately installed runtime-assets directory. Package the
+# masks by default so a clean APK install can raster without host-side setup.
+# Developers may still opt out for a faster UI-only build.
+RIP_EMBED_BLUE_NOISE_MASKS="${RIP_EMBED_BLUE_NOISE_MASKS:-ON}"
 GRADLE_OPTS="${GRADLE_OPTS:-} -Djava.net.preferIPv4Stack=true -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false"
 export GRADLE_USER_HOME
 export GRADLE_OPTS

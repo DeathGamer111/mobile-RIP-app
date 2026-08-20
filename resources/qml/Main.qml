@@ -36,7 +36,7 @@ ApplicationWindow {
                                          : "X-33"					// Current printer selection (name or ID).
         property string selectedPPD: ""								// Chosen PPD/profile path or identifier.
         property bool usingSimulatedPrinter: true					// When true, use mock device behavior.
-        property bool usingMultiInkPrinter: selectedPrinter === "X-36NC (Photo Printer)"
+        property bool usingMultiInkPrinter: colorManager.directPrintSdkFamilyForPrinter(selectedPrinter) === "multi-ink"
         property bool selectedPrinterSupportsMultiInk: usingSimulatedPrinter && usingMultiInkPrinter
         property bool selectedPrinterSupportsWhite: usingSimulatedPrinter
                                                     && (selectedPrinter === "X-33"
@@ -54,6 +54,7 @@ ApplicationWindow {
         property bool supportsDirectPrint: platformCapabilities.supportsDirectPrint
         property string multiInkOutputMode: colorManager.multiInkOutputMode
         property int sdkSelectedPrinterIndex: colorManager.directPrintSetting("selectedPrinterIndex")
+        property string sdkSelectedPrinterName: colorManager.directPrintSetting("selectedPrinterName")
         property int sdkPrintDirection: colorManager.directPrintSetting("printDirection")
         property int sdkPrintSpeed: colorManager.directPrintSetting("printSpeed")
         property int sdkWcSequence: colorManager.directPrintSetting("wcSequence")
@@ -78,6 +79,8 @@ ApplicationWindow {
         property bool isGeneratingPRN: false						// Global flag to gate UI during PRN generation.
         property string outputProgressMode: ""                  // "prn" | "direct"
         property string outputProgressPhase: ""                 // rasterizing | generatingPrn | printing
+        property real outputProgressValue: 0
+        property real outputProgressMaximum: 0
 
         function directPrintSdkFamily() {
             return colorManager.directPrintSdkFamilyForPrinter(selectedPrinter)

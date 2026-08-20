@@ -3,6 +3,7 @@
 #include <QQmlContext>
 #include <QImageReader>
 #include <QIcon>
+#include <QPixmap>
 #include <QLockFile>
 #include <QPalette>
 #include <QStyleFactory>
@@ -13,6 +14,8 @@
 #include <QStandardPaths>
 
 #include "PrintJobModel.h"
+#include "RasterSpool.h"
+#include "BoundedRasterPipeline.h"
 #include "AppStrings.h"
 #include "ImageLoader.h"
 #include "PrintJobOutput.h"
@@ -114,7 +117,9 @@ int main(int argc, char *argv[]) {
 
     QApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("PrintFlow"));
-    app.setDesktopFileName(QStringLiteral("PrintFlow"));
+    // Must match the case-sensitive basename of printflow.desktop so Linux
+    // shells associate the window with its launcher and themed dock icon.
+    app.setDesktopFileName(QStringLiteral("printflow"));
 
 #if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
     installGracefulTerminationHandlers();
@@ -142,14 +147,24 @@ int main(int argc, char *argv[]) {
         qCritical() << "PrintFlow is already running; refusing to start a second GUI instance.";
         return 2;
     }
+    PrintFlowRasterSpool::removeStalePartials(
+        PrintFlowRasterSpool::scratchDirectory());
+    // Configure ImageMagick before constructing any backend-owned Magick
+    // images so Android adopts the app-controlled pixel-cache directory.
+    BoundedRasterPipeline::configureImageMagickCache();
 
     migrateLegacyAppData();
 
     ThemeManager themeManager;
     themeManager.loadSelectedTheme();
-    app.setWindowIcon(QIcon(themeManager.logoPath().startsWith(QStringLiteral("qrc:/"))
+    const QString applicationIconPath = themeManager.logoPath().startsWith(QStringLiteral("qrc:/"))
         ? QString(themeManager.logoPath()).replace(QStringLiteral("qrc:/"), QStringLiteral(":/"))
-        : themeManager.logoPath()));
+        : themeManager.logoPath();
+    const QPixmap applicationIconPixmap(applicationIconPath);
+    const QIcon applicationIcon(applicationIconPixmap);
+    if (applicationIconPixmap.isNull())
+        qWarning() << "PrintFlow application icon could not be loaded from" << themeManager.logoPath();
+    app.setWindowIcon(applicationIcon);
   
     // Optional: set Material theme + accent via env vars
     qputenv("QT_QUICK_CONTROLS_MATERIAL_PRIMARY", themeManager.primaryColor().name().toUtf8());
@@ -208,6 +223,12 @@ int main(int argc, char *argv[]) {
     engine.load(QUrl(QStringLiteral("qrc:/qml/Main.qml")));
     if (engine.rootObjects().isEmpty())
         return -1;
+
+    // QML ApplicationWindow does not consistently inherit QApplication's icon
+    // on every Linux window manager. Set it explicitly so X11 also publishes
+    // _NET_WM_ICON when no desktop-shell lookup is available.
+    if (auto* rootWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst()))
+        rootWindow->setIcon(applicationIcon);
 
     return app.exec();
 }

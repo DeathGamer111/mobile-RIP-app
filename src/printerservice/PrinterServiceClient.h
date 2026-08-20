@@ -11,9 +11,11 @@
 #include <QVariantMap>
 
 #include <functional>
+#include <atomic>
 
 class PRINTFLOW_PRINTER_API PrinterServiceClient : public QObject,
-                                                    public IPrintOutputClient
+                                                    public IPrintOutputClient,
+                                                    public ISpooledPrintOutputClient
 {
     Q_OBJECT
     Q_PROPERTY(bool available READ isAvailable NOTIFY statusChanged)
@@ -48,6 +50,7 @@ public:
     Q_INVOKABLE bool refreshPrinters();
     Q_INVOKABLE bool choosePrinter(int index);
     Q_INVOKABLE bool abortPrint();
+    Q_INVOKABLE void cancelCurrentOutput();
     Q_INVOKABLE bool pausePrint();
     Q_INVOKABLE bool continuePrint();
     Q_INVOKABLE QString statusText();
@@ -91,6 +94,9 @@ public:
 
     bool submitPreparedJob(const DirectPrintRaster& raster,
                            const DirectPrintSettings& settings) override;
+    void setSpoolProgressCallback(ProgressCallback callback) override;
+    bool submitSpooledJob(const DirectPrintSpool& spool,
+                          const DirectPrintSettings& settings) override;
 
 signals:
     void statusChanged();
@@ -120,6 +126,8 @@ private:
     QVariantMap maintenanceMap(const QString& action,
                                const QVariantMap& arguments = {});
     QVariantMap configureArguments() const;
+    void reportSpoolProgress(const QString& phase, qint64 completed,
+                             qint64 total);
 
     mutable QRecursiveMutex m_mutex;
     bool m_available = false;
@@ -132,4 +140,7 @@ private:
     QVariantList m_printers;
     QString m_currentMaintenanceAction;
     QFutureWatcher<QVariantMap> m_maintenanceWatcher;
+    std::atomic_bool m_cancelUpload{false};
+    std::atomic_bool m_uploadActive{false};
+    ProgressCallback m_spoolProgressCallback;
 };

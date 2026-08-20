@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QEventLoop>
 #include <QMutexLocker>
 #include <QDataStream>
 #include <QProcess>
@@ -38,6 +39,60 @@ static constexpr int kMaxPrinters = 100;
 static constexpr uint32_t kPrintSignature = 0x00005555u;
 static constexpr quint32 kWorkerJobMagic = 0x50464e57u; // "PFNW"
 static constexpr quint32 kWorkerJobVersion = 3;
+static constexpr quint32 kWorkerSpoolMagic = 0x50465357u; // "PFSW"
+static constexpr quint32 kWorkerSpoolVersion = 2;
+
+void writeWorkerSettings(QDataStream& out, const DirectPrintSettings& settings)
+{
+    out << qint32(settings.printerIndex)
+        << qint32(settings.printDirection) << qint32(settings.printSpeed)
+        << qint32(settings.wcSequence) << qint32(settings.eclosionGrade)
+        << qint32(settings.headSelect) << qint32(settings.whiteInkPercent)
+        << qint32(settings.whiteInkPassCount) << qint32(settings.varnishInkPercent)
+        << qint32(settings.varnishInkPassCount) << qint32(settings.headVoltage)
+        << qint32(settings.disableUv0) << qint32(settings.disableUv1)
+        << qint32(settings.disableUv2) << qint32(settings.disableUv3)
+        << qint32(settings.disableUv4) << qint32(settings.disableUv5)
+        << qint32(settings.carReset) << qint32(settings.stripBlank)
+        << qint32(settings.blankDistance) << settings.mediaHeightMm
+        << qint32(settings.printOffsetXmm) << qint32(settings.printOffsetYmm)
+        << qint32(settings.pass) << qint32(settings.vsdMode);
+}
+
+bool readWorkerSettings(QDataStream& in, DirectPrintSettings& settings)
+{
+    qint32 values[20] = {};
+    for (qint32& value : values)
+        in >> value;
+    settings.printerIndex = values[0];
+    settings.printDirection = values[1];
+    settings.printSpeed = values[2];
+    settings.wcSequence = values[3];
+    settings.eclosionGrade = values[4];
+    settings.headSelect = values[5];
+    settings.whiteInkPercent = values[6];
+    settings.whiteInkPassCount = values[7];
+    settings.varnishInkPercent = values[8];
+    settings.varnishInkPassCount = values[9];
+    settings.headVoltage = values[10];
+    settings.disableUv0 = values[11];
+    settings.disableUv1 = values[12];
+    settings.disableUv2 = values[13];
+    settings.disableUv3 = values[14];
+    settings.disableUv4 = values[15];
+    settings.disableUv5 = values[16];
+    settings.carReset = values[17];
+    settings.stripBlank = values[18];
+    settings.blankDistance = values[19];
+    in >> settings.mediaHeightMm;
+    qint32 offsetX = 0, offsetY = 0, pass = 0, vsd = 0;
+    in >> offsetX >> offsetY >> pass >> vsd;
+    settings.printOffsetXmm = offsetX;
+    settings.printOffsetYmm = offsetY;
+    settings.pass = pass;
+    settings.vsdMode = vsd;
+    return in.status() == QDataStream::Ok;
+}
 
 std::recursive_mutex g_sdkStdoutMutex;
 
@@ -504,10 +559,35 @@ bool NocaiDirectPrintClient::choosePrinter(int index)
 
 bool NocaiDirectPrintClient::abortPrint()
 {
+    m_cancelRequested.store(true, std::memory_order_relaxed);
+    QString cancelFile;
+    {
+        QMutexLocker cancelLocker(&m_cancelFileMutex);
+        cancelFile = m_isolatedCancelFilePath;
+    }
+    if (!cancelFile.isEmpty()) {
+        QFile request(cancelFile);
+        return request.open(QIODevice::WriteOnly | QIODevice::Truncate);
+    }
     QMutexLocker locker(&m_mutex);
     if (!ensureLoaded())
         return false;
     return callSucceeded(m_abortPrint(), "AbortPrint");
+}
+
+void NocaiDirectPrintClient::cancelCurrentOutput()
+{
+    m_cancelRequested.store(true, std::memory_order_relaxed);
+    QString cancelFile;
+    {
+        QMutexLocker locker(&m_cancelFileMutex);
+        cancelFile = m_isolatedCancelFilePath;
+    }
+    if (!cancelFile.isEmpty()) {
+        QFile request(cancelFile);
+        if (request.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            request.close();
+    }
 }
 
 bool NocaiDirectPrintClient::pausePrint()
@@ -1233,6 +1313,149 @@ bool NocaiDirectPrintClient::submitPreparedJob(const DirectPrintRaster& raster,
 #endif
 }
 
+void NocaiDirectPrintClient::setSpoolProgressCallback(ProgressCallback callback)
+{
+    m_spoolProgressCallback = std::move(callback);
+}
+
+bool NocaiDirectPrintClient::submitSpooledJob(
+    const DirectPrintSpool& spool, const DirectPrintSettings& settings)
+{
+    m_cancelRequested.store(false, std::memory_order_relaxed);
+    QString error;
+    if (!PrintFlowRasterSpool::verify(spool, &error)) {
+        setError(error);
+        return false;
+    }
+    const qint64 totalLines = qint64(spool.height) *
+        qint64(spool.channelOrder.size());
+    if (m_spoolProgressCallback)
+        m_spoolProgressCallback(QStringLiteral("printing"), 0, totalLines);
+    bool printed = false;
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
+    qDebug() << "NocaiDirectPrintClient: reusing the active ARM SDK session for spooled raster upload.";
+    printed = printSpooledJob(spool, settings);
+#else
+    if ((QCoreApplication::applicationName() == QStringLiteral("PrintFlow") ||
+         QCoreApplication::applicationName() == QStringLiteral("PrintFlowPrinterService")) &&
+        !qEnvironmentVariableIsSet("PRINTFLOW_NOCAI_WORKER")) {
+        printed = submitSpooledJobIsolated(spool, settings);
+    } else {
+        printed = printSpooledJob(spool, settings);
+    }
+#endif
+    if (printed && m_spoolProgressCallback)
+        m_spoolProgressCallback(QStringLiteral("printing"), totalLines, totalLines);
+    return printed;
+}
+
+bool NocaiDirectPrintClient::printSpooledJob(
+    const DirectPrintSpool& spool, const DirectPrintSettings& settings)
+{
+    PrintFlowRasterSpool::Reader reader;
+    QString error;
+    if (!reader.open(spool.path, true, &error)) {
+        setError(error);
+        return false;
+    }
+    std::vector<std::vector<std::vector<uint8_t>>> placeholder(
+        static_cast<size_t>(spool.logicalChannelCount));
+    DirectPrintRaster raster;
+    raster.packedLines = &placeholder;
+    raster.channelOrder = spool.channelOrder;
+    raster.width = spool.width;
+    raster.height = spool.height;
+    raster.xdpi = spool.xdpi;
+    raster.ydpi = spool.ydpi;
+    raster.bytesPerLine = spool.bytesPerLine;
+    raster.format = spool.format;
+    raster.canonicalHeader = spool.canonicalHeader;
+    m_activeSpoolReader = &reader;
+    const auto cleanup = qScopeGuard([this]() { m_activeSpoolReader = nullptr; });
+    return printPackedJob(raster, settings);
+}
+
+bool NocaiDirectPrintClient::submitSpooledJobIsolated(
+    const DirectPrintSpool& spool, const DirectPrintSettings& settings)
+{
+    QMutexLocker locker(&m_mutex);
+    const QString sdkRoot = m_resolvedSdkRoot.isEmpty()
+        ? resolveSdkRoot() : m_resolvedSdkRoot;
+    if (sdkRoot.isEmpty()) {
+        setError("No architecture-compatible direct print SDK folder was found.");
+        return false;
+    }
+    QTemporaryDir temporaryDir(QStringLiteral("/tmp/PrintFlow-NocaiWorker-XXXXXX"));
+    if (!temporaryDir.isValid()) {
+        setError("Could not create the isolated direct-print job folder.");
+        return false;
+    }
+    const QString descriptorPath = temporaryDir.filePath(QStringLiteral("job.pfsw"));
+    const QString cancelPath = temporaryDir.filePath(QStringLiteral("cancel.request"));
+    {
+        QMutexLocker cancelLocker(&m_cancelFileMutex);
+        m_isolatedCancelFilePath = cancelPath;
+    }
+    const auto cancelPathGuard = qScopeGuard([this, cancelPath]() {
+        QFile::remove(cancelPath);
+        QMutexLocker cancelLocker(&m_cancelFileMutex);
+        m_isolatedCancelFilePath.clear();
+    });
+    QFile file(descriptorPath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        setError(QStringLiteral("Could not create isolated spool descriptor: %1")
+                     .arg(file.errorString()));
+        return false;
+    }
+    QDataStream out(&file);
+    out.setVersion(QDataStream::Qt_6_0);
+    out << kWorkerSpoolMagic << kWorkerSpoolVersion << sdkRoot << spool.path
+        << cancelPath;
+    writeWorkerSettings(out, settings);
+    file.close();
+    if (out.status() != QDataStream::Ok) {
+        setError("Could not serialize the isolated spool descriptor.");
+        return false;
+    }
+    if (!unloadSdkSession())
+        return false;
+    emit statusChanged();
+    QProcess worker;
+    worker.setProgram(QCoreApplication::applicationFilePath());
+    worker.setArguments({QStringLiteral("--nocai-print-worker"), descriptorPath});
+    worker.setWorkingDirectory(sdkRoot);
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QStringLiteral("PRINTFLOW_NOCAI_WORKER"), QStringLiteral("1"));
+    worker.setProcessEnvironment(environment);
+    worker.setProcessChannelMode(QProcess::ForwardedChannels);
+    worker.start();
+    if (!worker.waitForStarted(10000)) {
+        setError(QStringLiteral("Could not start isolated direct-print worker: %1")
+                     .arg(worker.errorString()));
+        return false;
+    }
+    while (!worker.waitForFinished(100)) {
+        // The printer service runs this method on its event thread. Briefly
+        // service pending events so a separate abort request can create the
+        // worker's cancellation marker without loading the vendor SDK again.
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
+    }
+    if (worker.exitStatus() != QProcess::NormalExit || worker.exitCode() != 0) {
+        m_connected = false;
+        if (m_cancelRequested.load(std::memory_order_relaxed)) {
+            setError(QStringLiteral("Direct print was canceled."));
+        } else {
+            setError(worker.exitStatus() == QProcess::CrashExit
+                         ? QStringLiteral("The vendor print SDK crashed in the isolated worker; PrintFlow remained open.")
+                         : QStringLiteral("The isolated direct-print worker failed with exit code %1.")
+                               .arg(worker.exitCode()));
+        }
+        return false;
+    }
+    qDebug() << "NocaiDirectPrintClient: isolated spooled raster upload completed.";
+    return true;
+}
+
 bool NocaiDirectPrintClient::submitPreparedJobIsolated(
     const DirectPrintRaster& raster,
     const DirectPrintSettings& settings)
@@ -1367,6 +1590,39 @@ int NocaiDirectPrintClient::runSerializedPrintWorker(const QString& jobPath)
     std::array<uint32_t, 12> canonicalHeader{};
     qint32 channelCount = 0;
     in >> magic >> version >> sdkRoot;
+    if (magic == kWorkerSpoolMagic) {
+        QString spoolPath;
+        QString cancelPath;
+        DirectPrintSettings settings;
+        in >> spoolPath;
+        if (version >= 2)
+            in >> cancelPath;
+        if (version < 1 || version > kWorkerSpoolVersion || spoolPath.isEmpty() ||
+            !readWorkerSettings(in, settings)) {
+            qCritical() << "Nocai print worker: invalid spool descriptor.";
+            return 2;
+        }
+        DirectPrintSpool spool;
+        QString error;
+        if (!PrintFlowRasterSpool::readMetadata(spoolPath, &spool, &error) ||
+            !PrintFlowRasterSpool::verify(spool, &error)) {
+            qCritical().noquote() << "Nocai print worker:" << error;
+            return 2;
+        }
+        NocaiDirectPrintClient client;
+        client.m_workerCancelFilePath = cancelPath;
+        client.setSdkRootPath(sdkRoot);
+        client.setAutoDiscoverSdk(false);
+        if (!client.refreshPrinters()) {
+            qCritical() << "Nocai print worker:" << client.lastError();
+            return 3;
+        }
+        if (!client.printSpooledJob(spool, settings)) {
+            qCritical() << "Nocai print worker:" << client.lastError();
+            return 4;
+        }
+        return 0;
+    }
     in >> width >> height >> xdpi >> ydpi >> bytesPerLine >> rasterFormat;
     for (uint32_t& word : canonicalHeader) {
         quint32 serializedWord = 0;
@@ -1376,7 +1632,7 @@ int NocaiDirectPrintClient::runSerializedPrintWorker(const QString& jobPath)
     in >> channelCount;
     if (magic != kWorkerJobMagic || version != kWorkerJobVersion ||
         width <= 0 || height <= 0 || bytesPerLine <= 0 ||
-        rasterFormat > quint8(DirectPrintRasterFormat::NocaiX33Standard) ||
+        rasterFormat > quint8(DirectPrintRasterFormat::NocaiMultiInk) ||
         channelCount <= 0 || channelCount > 16) {
         qCritical() << "Nocai print worker: invalid serialized job header.";
         return 2;
@@ -1395,40 +1651,10 @@ int NocaiDirectPrintClient::runSerializedPrintWorker(const QString& jobPath)
     }
 
     DirectPrintSettings settings;
-    qint32 values[20] = {};
-    for (qint32& value : values)
-        in >> value;
-    settings.printerIndex = values[0];
-    settings.printDirection = values[1];
-    settings.printSpeed = values[2];
-    settings.wcSequence = values[3];
-    settings.eclosionGrade = values[4];
-    settings.headSelect = values[5];
-    settings.whiteInkPercent = values[6];
-    settings.whiteInkPassCount = values[7];
-    settings.varnishInkPercent = values[8];
-    settings.varnishInkPassCount = values[9];
-    settings.headVoltage = values[10];
-    settings.disableUv0 = values[11];
-    settings.disableUv1 = values[12];
-    settings.disableUv2 = values[13];
-    settings.disableUv3 = values[14];
-    settings.disableUv4 = values[15];
-    settings.disableUv5 = values[16];
-    settings.carReset = values[17];
-    settings.stripBlank = values[18];
-    settings.blankDistance = values[19];
-    in >> settings.mediaHeightMm;
-    qint32 printOffsetXmm = 0;
-    qint32 printOffsetYmm = 0;
-    in >> printOffsetXmm >> printOffsetYmm;
-    settings.printOffsetXmm = printOffsetXmm;
-    settings.printOffsetYmm = printOffsetYmm;
-    qint32 pass = 0;
-    qint32 vsdMode = 0;
-    in >> pass >> vsdMode;
-    settings.pass = pass;
-    settings.vsdMode = vsdMode;
+    if (!readWorkerSettings(in, settings)) {
+        qCritical() << "Nocai print worker: truncated job settings.";
+        return 2;
+    }
 
     std::vector<std::vector<std::vector<uint8_t>>> packedLines(
         static_cast<size_t>(maximumChannel + 1),
@@ -1542,10 +1768,17 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
         // The legacy x64 PROII SDK corrupts its reverse-direction swath length
         // for this controller in bidirectional mode (PrintDirection=0).  The
         // resulting unsigned underflow makes API_PrintALine write beyond the
-        // SDK's allocation near the sixth swath.  Both supported X-33 header
-        // interpretations complete normally in left-to-right mode, so keep
-        // this workaround local to the legacy X-33 path.
+        // SDK's allocation near the sixth swath. Both supported X-33 header
+        // interpretations complete normally in left-to-right mode, which is
+        // also the direction physically validated on the X-33 controller.
         jobSettings.PrintDirection = 1;
+    }
+    const char* featheringLevel = "Off";
+    switch (jobSettings.EclosionGrade) {
+    case 1: featheringLevel = "Low"; break;
+    case 2: featheringLevel = "Medium"; break;
+    case 3: featheringLevel = "High"; break;
+    default: break;
     }
     qDebug().nospace()
         << "NocaiDirectPrintClient: X-33 job header: "
@@ -1557,7 +1790,9 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
         << ", pass=" << prop.Pass
         << ", vsdMode=" << prop.VsdMode
         << ", headSelect=" << jobSettings.HeadSelect
-        << ", direction=" << jobSettings.PrintDirection;
+        << ", direction=" << jobSettings.PrintDirection
+        << ", feathering=" << featheringLevel
+        << ", eclosionGrade=" << jobSettings.EclosionGrade;
 
     // Printer Setup normally establishes this lifecycle. A job submitted
     // directly after application startup must establish it once here rather
@@ -1813,20 +2048,51 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
 
         for (int row = 0; row < raster.height; ++row) {
             for (size_t plane = 0; plane < raster.channelOrder.size(); ++plane) {
+                if ((m_cancelRequested.load(std::memory_order_relaxed) ||
+                     (!m_workerCancelFilePath.isEmpty() &&
+                      QFileInfo::exists(m_workerCancelFilePath)))) {
+                    m_abortPrint();
+                    m_closePrint();
+                    setError("Direct print was canceled.");
+                    return false;
+                }
+                if ((row * int(raster.channelOrder.size()) + int(plane)) % 8 == 0)
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
                 const int ch = raster.channelOrder[plane];
-                if (ch < 0 || ch >= static_cast<int>(raster.packedLines->size()) ||
-                    row < 0 || row >= static_cast<int>((*raster.packedLines)[ch].size())) {
+                if (ch < 0 || ch >= static_cast<int>(raster.packedLines->size())) {
                     setError("Direct print raster channel/row index is invalid.");
                     m_abortPrint();
                     m_closePrint();
                     return false;
                 }
-
-                const std::vector<uint8_t>& line = (*raster.packedLines)[ch][row];
-                if (line.size() != prop.BytesPerLine) {
+                QByteArray spoolLine;
+                const uint8_t* lineData = nullptr;
+                size_t lineSize = 0;
+                if (m_activeSpoolReader) {
+                    QString readError;
+                    if (!m_activeSpoolReader->readLine(ch, row, &spoolLine, &readError)) {
+                        setError(readError);
+                        m_abortPrint();
+                        m_closePrint();
+                        return false;
+                    }
+                    lineData = reinterpret_cast<const uint8_t*>(spoolLine.constData());
+                    lineSize = size_t(spoolLine.size());
+                } else {
+                    if (row < 0 || row >= static_cast<int>((*raster.packedLines)[ch].size())) {
+                        setError("Direct print raster channel/row index is invalid.");
+                        m_abortPrint();
+                        m_closePrint();
+                        return false;
+                    }
+                    const std::vector<uint8_t>& line = (*raster.packedLines)[ch][row];
+                    lineData = line.data();
+                    lineSize = line.size();
+                }
+                if (lineSize != prop.BytesPerLine) {
                     setError(QStringLiteral(
                         "Direct print plane-line size mismatch: got %1, expected %2.")
-                                 .arg(line.size())
+                                 .arg(lineSize)
                                  .arg(prop.BytesPerLine));
                     m_abortPrint();
                     m_closePrint();
@@ -1839,7 +2105,7 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                 // image row (Height * Colors calls in total). X-33 white jobs
                 // append the same screened W line twice: YMCKWW.
                 const int bytesWritten = m_printALine(
-                    reinterpret_cast<char*>(const_cast<uint8_t*>(line.data())),
+                    reinterpret_cast<char*>(const_cast<uint8_t*>(lineData)),
                     prop.BytesPerLine);
                 if (bytesWritten != static_cast<int>(prop.BytesPerLine)) {
                     if (bytesWritten == -1) {
@@ -1858,6 +2124,14 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                     m_abortPrint();
                     m_closePrint();
                     return false;
+                }
+                if (m_spoolProgressCallback) {
+                    const qint64 completed = qint64(row) *
+                        qint64(raster.channelOrder.size()) + qint64(plane) + 1;
+                    m_spoolProgressCallback(
+                        QStringLiteral("printing"), completed,
+                        qint64(raster.height) *
+                            qint64(raster.channelOrder.size()));
                 }
             }
 
@@ -2254,7 +2528,7 @@ NocaiDirectPrintClient::jobSettingsFromMap(const QVariantMap& settings) const
     normalized.printDirection = value("printDirection", 0);
     normalized.printSpeed = value("printSpeed", 1);
     normalized.wcSequence = value("wcSequence", 0);
-    normalized.eclosionGrade = value("eclosionGrade", 0);
+    normalized.eclosionGrade = value("eclosionGrade", 2);
     normalized.headSelect = value("headSelect", 0);
     normalized.whiteInkPercent = value("whiteInkPercent", 0);
     normalized.whiteInkPassCount = value("whiteInkPassCount", 0);

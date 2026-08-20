@@ -3,20 +3,56 @@
 #include "PrinterServiceProtocol.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QLocalSocket>
 #include <QTcpSocket>
 #include <QTimer>
+#include <QStandardPaths>
+#include <QStorageInfo>
+#include <QScopeGuard>
+#include <QUuid>
+
+namespace {
+constexpr qsizetype kUploadChunkBytes = 1024 * 1024;
+constexpr qint64 kUploadExpiryMs = 5 * 60 * 1000;
+
+QString uploadDirectory()
+{
+    QString root = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    if (root.isEmpty())
+        root = QDir::tempPath();
+    const QString path = QDir(root).filePath(QStringLiteral("PrintFlow-printer-uploads"));
+    QDir().mkpath(path);
+    return path;
+}
+}
 
 PrinterServiceServer::PrinterServiceServer(QObject* parent)
     : QObject(parent)
 {
+    QDir uploadRoot(uploadDirectory());
+    for (const QFileInfo& partial : uploadRoot.entryInfoList(
+             {QStringLiteral("*.upload.partial")}, QDir::Files))
+        QFile::remove(partial.absoluteFilePath());
     m_backend.setAutoDiscoverSdk(true);
     connect(&m_server, &QLocalServer::newConnection,
             this, &PrinterServiceServer::acceptConnections);
     connect(&m_tcpServer, &QTcpServer::newConnection,
             this, &PrinterServiceServer::acceptTcpConnections);
+    auto* uploadCleanupTimer = new QTimer(this);
+    uploadCleanupTimer->setInterval(60 * 1000);
+    connect(uploadCleanupTimer, &QTimer::timeout,
+            this, &PrinterServiceServer::removeExpiredUploads);
+    uploadCleanupTimer->start();
+}
+
+PrinterServiceServer::~PrinterServiceServer()
+{
+    for (const UploadState& upload : std::as_const(m_uploads))
+        QFile::remove(upload.partialPath);
 }
 
 bool PrinterServiceServer::listenTcp(const QHostAddress& address, quint16 port,
@@ -170,7 +206,10 @@ void PrinterServiceServer::removeTcpClient()
 QVariantMap PrinterServiceServer::serviceState()
 {
     return {
-        {QStringLiteral("available"), m_backend.isAvailable()},
+        // Calling isAvailable() may reload the vendor library. Keep the SDK
+        // isolated in its worker while a physical print is in progress.
+        {QStringLiteral("available"),
+         m_printInProgress ? true : m_backend.isAvailable()},
         {QStringLiteral("connected"), m_backend.isConnected()},
         {QStringLiteral("lastError"), m_backend.lastError()},
         {QStringLiteral("sdkRootPath"), m_backend.sdkRootPath()},
@@ -181,6 +220,8 @@ QVariantMap PrinterServiceServer::serviceState()
         {QStringLiteral("servicePid"), QCoreApplication::applicationPid()},
         {QStringLiteral("protocolVersion"),
          PrintFlowPrinterServiceProtocol::Version},
+        {QStringLiteral("streamingRasterUpload"), true},
+        {QStringLiteral("rasterUploadChunkBytes"), kUploadChunkBytes},
     };
 }
 
@@ -204,6 +245,11 @@ QVariantMap PrinterServiceServer::handleRequest(const QVariantMap& request)
 
     if (command == QLatin1String("ping"))
         return response(true, QStringLiteral("PrintFlowPrinterService"));
+
+    if (m_printInProgress && command != QLatin1String("abortPrint")) {
+        return response(false, {},
+                        QStringLiteral("A print job is already in progress."));
+    }
 
     if (command == QLatin1String("configure")) {
         m_backend.setSdkRootPath(arguments.value(
@@ -303,6 +349,140 @@ QVariantMap PrinterServiceServer::handleRequest(const QVariantMap& request)
                         completion.value(QStringLiteral("result")),
                         completion.value(QStringLiteral("error")).toString());
     }
+    if (command == QLatin1String("beginRasterUpload")) {
+        DirectPrintSpool expected;
+        DirectPrintSettings settings;
+        QString error;
+        const quint64 expectedBytes = arguments.value(
+            QStringLiteral("fileBytes")).toULongLong();
+        if (!PrintFlowPrinterServiceProtocol::spoolMetadataFromMap(
+                arguments.value(QStringLiteral("spool")).toMap(),
+                &expected, &error) ||
+            !PrintFlowPrinterServiceProtocol::settingsFromMap(
+                arguments.value(QStringLiteral("settings")).toMap(),
+                &settings, &error) ||
+            !PrintFlowRasterSpool::metadataIsValid(expected, &error) ||
+            expected.bodyOffset != PrintFlowRasterSpool::HeaderBytes ||
+            expected.bodyBytes != PrintFlowRasterSpool::expectedBodyBytes(expected) ||
+            expectedBytes != expected.bodyOffset + expected.bodyBytes) {
+            if (error.isEmpty())
+                error = QStringLiteral("Raster upload file length does not match its metadata.");
+            return response(false, {}, error);
+        }
+        const QStorageInfo uploadStorage(uploadDirectory());
+        const quint64 requiredUploadBytes = expectedBytes + expectedBytes / 5;
+        if (!uploadStorage.isValid() || !uploadStorage.isReady() ||
+            quint64(uploadStorage.bytesAvailable()) < requiredUploadBytes) {
+            return response(
+                false, {},
+                QStringLiteral("Not enough temporary storage for the raster upload. Required: %1 MiB; available: %2 MiB.")
+                    .arg((requiredUploadBytes + 1024 * 1024 - 1) / (1024 * 1024))
+                    .arg(uploadStorage.isValid()
+                             ? quint64(uploadStorage.bytesAvailable()) / (1024 * 1024)
+                             : 0));
+        }
+        const QString uploadId = QUuid::createUuid().toString(QUuid::Id128);
+        UploadState upload;
+        upload.expectedBytes = expectedBytes;
+        upload.expectedSpool = expected;
+        upload.settings = settings;
+        upload.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
+        upload.partialPath = QDir(uploadDirectory()).filePath(
+            uploadId + QStringLiteral(".upload.partial"));
+        QFile file(upload.partialPath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            return response(false, {}, file.errorString());
+        file.close();
+        m_uploads.insert(uploadId, std::move(upload));
+        return response(true, QVariantMap{
+            {QStringLiteral("uploadId"), uploadId},
+            {QStringLiteral("chunkBytes"), kUploadChunkBytes}});
+    }
+    if (command == QLatin1String("appendRasterChunk")) {
+        const QString uploadId = arguments.value(
+            QStringLiteral("uploadId")).toString();
+        auto found = m_uploads.find(uploadId);
+        if (found == m_uploads.end())
+            return response(false, {}, QStringLiteral("Raster upload does not exist."));
+        const quint64 offset = arguments.value(QStringLiteral("offset")).toULongLong();
+        const QByteArray chunk = request.value(QStringLiteral("payload")).toByteArray();
+        if (offset != found->receivedBytes || chunk.isEmpty() ||
+            chunk.size() > kUploadChunkBytes ||
+            found->receivedBytes + quint64(chunk.size()) > found->expectedBytes) {
+            return response(false, {}, QStringLiteral("Raster upload chunk offset or size is invalid."));
+        }
+        QFile file(found->partialPath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Append) ||
+            file.write(chunk) != chunk.size()) {
+            const QString error = file.errorString();
+            file.close();
+            QFile::remove(found->partialPath);
+            m_uploads.erase(found);
+            return response(false, {}, error);
+        }
+        file.close();
+        found->receivedBytes += quint64(chunk.size());
+        found->lastActivityMs = QDateTime::currentMSecsSinceEpoch();
+        return response(true, qulonglong(found->receivedBytes));
+    }
+    if (command == QLatin1String("cancelRasterUpload")) {
+        const QString uploadId = arguments.value(
+            QStringLiteral("uploadId")).toString();
+        const auto found = m_uploads.find(uploadId);
+        if (found != m_uploads.end()) {
+            QFile::remove(found->partialPath);
+            m_uploads.erase(found);
+        }
+        return response(true);
+    }
+    if (command == QLatin1String("commitRasterUpload")) {
+        const QString uploadId = arguments.value(
+            QStringLiteral("uploadId")).toString();
+        auto found = m_uploads.find(uploadId);
+        if (found == m_uploads.end())
+            return response(false, {}, QStringLiteral("Raster upload does not exist."));
+        UploadState upload = *found;
+        m_uploads.erase(found);
+        if (upload.receivedBytes != upload.expectedBytes) {
+            QFile::remove(upload.partialPath);
+            return response(false, {}, QStringLiteral("Raster upload is incomplete."));
+        }
+        QString finalPath = upload.partialPath;
+        finalPath.chop(QStringLiteral(".upload.partial").size());
+        finalPath += QStringLiteral(".pfrs");
+        if (!QFile::rename(upload.partialPath, finalPath)) {
+            QFile::remove(upload.partialPath);
+            return response(false, {}, QStringLiteral("Could not finalize the uploaded raster spool."));
+        }
+        DirectPrintSpool uploaded;
+        QString error;
+        bool valid = PrintFlowRasterSpool::readMetadata(finalPath, &uploaded, &error) &&
+                     PrintFlowRasterSpool::verify(uploaded, &error);
+        const DirectPrintSpool& expected = upload.expectedSpool;
+        valid = valid && uploaded.width == expected.width &&
+            uploaded.height == expected.height && uploaded.xdpi == expected.xdpi &&
+            uploaded.ydpi == expected.ydpi &&
+            uploaded.bytesPerLine == expected.bytesPerLine &&
+            uploaded.logicalChannelCount == expected.logicalChannelCount &&
+            uploaded.channelOrder == expected.channelOrder &&
+            uploaded.format == expected.format &&
+            uploaded.canonicalHeader == expected.canonicalHeader &&
+            uploaded.bodyBytes == expected.bodyBytes &&
+            uploaded.sha256 == expected.sha256;
+        if (!valid) {
+            QFile::remove(finalPath);
+            return response(false, {}, error.isEmpty()
+                ? QStringLiteral("Uploaded raster metadata does not match the submitted job.")
+                : error);
+        }
+        m_printInProgress = true;
+        const auto printGuard = qScopeGuard([this]() {
+            m_printInProgress = false;
+        });
+        const bool ok = m_backend.submitSpooledJob(uploaded, upload.settings);
+        QFile::remove(finalPath);
+        return response(ok, {}, m_backend.lastError());
+    }
     if (command == QLatin1String("submitJob")) {
         std::vector<std::vector<std::vector<uint8_t>>> storage;
         DirectPrintRaster raster;
@@ -330,6 +510,19 @@ QVariantMap PrinterServiceServer::handleRequest(const QVariantMap& request)
     return response(false, {},
                     QStringLiteral("Unknown printer-service command: %1")
                         .arg(command));
+}
+
+void PrinterServiceServer::removeExpiredUploads()
+{
+    const qint64 cutoff = QDateTime::currentMSecsSinceEpoch() - kUploadExpiryMs;
+    for (auto upload = m_uploads.begin(); upload != m_uploads.end();) {
+        if (upload->lastActivityMs > cutoff) {
+            ++upload;
+            continue;
+        }
+        QFile::remove(upload->partialPath);
+        upload = m_uploads.erase(upload);
+    }
 }
 
 void PrinterServiceServer::finishRequest(QLocalSocket* socket,

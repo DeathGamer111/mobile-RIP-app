@@ -1,7 +1,9 @@
 #include "NocaiPrnWriter.h"
+#include "RasterSpool.h"
 
 #include <QDebug>
 #include <QUrl>
+#include <QSaveFile>
 
 #include <algorithm>
 #include <cstring>
@@ -25,6 +27,12 @@ struct InkjetImageHeader {
     uint8_t  colorList[16];
 };
 #pragma pack(pop)
+
+QString localOutputPath(const QString& outputPath)
+{
+    const QUrl url(outputPath);
+    return url.isLocalFile() ? url.toLocalFile() : outputPath;
+}
 
 void buildColorListForMode(
     NocaiPrnWriter::MultiInkMode mode,
@@ -251,7 +259,7 @@ bool NocaiPrnWriter::writeStandardX33Prn(
         return false;
     }
 
-    const QString outPath = QUrl(outputPath).toLocalFile();
+    const QString outPath = localOutputPath(outputPath);
     std::ofstream out(outPath.toStdString(), std::ios::binary);
     if (!out) {
         qWarning() << "Failed to open output file for writing:" << outputPath;
@@ -305,6 +313,53 @@ bool NocaiPrnWriter::writeStandardX33Prn(
     return true;
 }
 
+bool NocaiPrnWriter::writeStandardX33Prn(
+    const DirectPrintSpool& spool, const QString& outputPath)
+{
+    const bool isCmyk = spool.channelOrder == std::vector<int>({2, 1, 0, 3});
+    const bool isWhite = spool.channelOrder == std::vector<int>({2, 1, 0, 3, 4, 4});
+    if ((!isCmyk && !isWhite) || !PrintFlowRasterSpool::metadataIsValid(spool)) {
+        qWarning() << "NocaiPrnWriter: invalid X-33 raster spool.";
+        return false;
+    }
+    PrintFlowRasterSpool::Reader reader;
+    QString error;
+    if (!reader.open(spool.path, true, &error)) {
+        qWarning().noquote() << "NocaiPrnWriter:" << error;
+        return false;
+    }
+    QSaveFile output(localOutputPath(outputPath));
+    if (!output.open(QIODevice::WriteOnly)) {
+        qWarning() << "NocaiPrnWriter: failed to open output file:" << outputPath;
+        return false;
+    }
+    const StandardX33Header header = makeStandardX33Header(
+        spool.width, spool.height, spool.xdpi, spool.ydpi,
+        spool.bytesPerLine, int(spool.channelOrder.size()));
+    if (output.write(reinterpret_cast<const char*>(header.data()), sizeof(header))
+        != qint64(sizeof(header)))
+        return false;
+    QByteArray line;
+    for (int row = 0; row < spool.height; ++row) {
+        for (const int channel : spool.channelOrder) {
+            if (!reader.readLine(channel, row, &line, &error) ||
+                output.write(line) != line.size()) {
+                qWarning().noquote() << "NocaiPrnWriter:"
+                                     << (error.isEmpty() ? output.errorString() : error);
+                return false;
+            }
+        }
+    }
+    if (!output.commit()) {
+        qWarning() << "NocaiPrnWriter: failed to finalize X-33 PRN:"
+                   << output.errorString();
+        return false;
+    }
+    qDebug() << "Final X-33 PRN file created:" << outputPath
+             << "with" << spool.channelOrder.size() << "planes.";
+    return true;
+}
+
 bool NocaiPrnWriter::writeMultiInkPrn(
     const std::vector<std::vector<std::vector<uint8_t>>>& packedLines,
     const std::vector<int>& channelOrder,
@@ -335,7 +390,7 @@ bool NocaiPrnWriter::writeMultiInkPrn(
         fxDpi = 720.0f;
     }
 
-    const QString outPath = QUrl(outputPath).toLocalFile();
+    const QString outPath = localOutputPath(outputPath);
     std::ofstream out(outPath.toStdString(), std::ios::binary);
     if (!out) {
         qWarning() << "NocaiPrnWriter: failed to open output file:" << outputPath;
@@ -377,5 +432,60 @@ bool NocaiPrnWriter::writeMultiInkPrn(
              << "colors" << colors
              << "bytesPerLine" << bytesPerLine;
 
+    return true;
+}
+
+bool NocaiPrnWriter::writeMultiInkPrn(
+    const DirectPrintSpool& spool, MultiInkMode mode,
+    const QString& outputPath)
+{
+    if (!PrintFlowRasterSpool::metadataIsValid(spool) ||
+        spool.channelOrder.size() > 16) {
+        qWarning() << "NocaiPrnWriter: invalid multi-ink raster spool.";
+        return false;
+    }
+    PrintFlowRasterSpool::Reader reader;
+    QString error;
+    if (!reader.open(spool.path, true, &error)) {
+        qWarning().noquote() << "NocaiPrnWriter:" << error;
+        return false;
+    }
+    QSaveFile output(localOutputPath(outputPath));
+    if (!output.open(QIODevice::WriteOnly)) {
+        qWarning() << "NocaiPrnWriter: failed to open output file:" << outputPath;
+        return false;
+    }
+    InkjetImageHeader header{};
+    const char magic[6] = {'i', 'n', 'k', 'j', 'e', 't'};
+    std::memcpy(header.magic, magic, sizeof(magic));
+    header.version = 1;
+    header.pixelWidth = uint32_t(spool.width);
+    header.pixelHeight = uint32_t(spool.height);
+    header.xDpi = std::min(720.0f, float(spool.xdpi));
+    header.yDpi = float(spool.ydpi);
+    header.bytesPerLine = uint32_t(spool.bytesPerLine);
+    header.dotBits = 2;
+    header.colorNum = uint8_t(spool.channelOrder.size());
+    buildColorListForMode(mode, spool.channelOrder, header.colorList);
+    if (output.write(reinterpret_cast<const char*>(&header), sizeof(header))
+        != qint64(sizeof(header)))
+        return false;
+    QByteArray line;
+    for (int row = 0; row < spool.height; ++row) {
+        for (const int channel : spool.channelOrder) {
+            if (!reader.readLine(channel, row, &line, &error) ||
+                output.write(line) != line.size()) {
+                qWarning().noquote() << "NocaiPrnWriter:"
+                                     << (error.isEmpty() ? output.errorString() : error);
+                return false;
+            }
+        }
+    }
+    if (!output.commit()) {
+        qWarning() << "NocaiPrnWriter: failed to finalize multi-ink PRN:"
+                   << output.errorString();
+        return false;
+    }
+    qDebug() << "NocaiPrnWriter: streamed PRN created at" << outputPath;
     return true;
 }

@@ -1,4 +1,5 @@
 #include "ImageLoader.h"
+#include "ImagePhysicalSize.h"
 #include "MagickCompatibility.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -15,6 +16,29 @@
 
 using namespace Magick;
 
+namespace {
+
+void addDensityMetadata(QVariantMap& meta, const Magick::Image& image)
+{
+    const ImagePhysicalSize::Density density =
+        ImagePhysicalSize::embeddedDensity(image);
+    meta["hasEmbeddedDpi"] = density.hasPhysicalUnits;
+    if (!density.hasPhysicalUnits)
+        return;
+
+    meta["xDpi"] = density.xDpi;
+    meta["yDpi"] = density.yDpi;
+    meta["dpi"] = QStringLiteral("%1 × %2")
+        .arg(density.xDpi, 0, 'f', 2)
+        .arg(density.yDpi, 0, 'f', 2);
+    meta["physicalWidthMm"] =
+        static_cast<double>(image.columns()) * 25.4 / density.xDpi;
+    meta["physicalHeightMm"] =
+        static_cast<double>(image.rows()) * 25.4 / density.yDpi;
+}
+
+} // namespace
+
 
 // Initializes supported extensions.
 ImageLoader::ImageLoader(QObject *parent) : QObject(parent) {
@@ -26,10 +50,13 @@ ImageLoader::ImageLoader(QObject *parent) : QObject(parent) {
 QString ImageLoader::renderPdfToPreviewImage(const QString& pdfPath) {
     try {
         Magick::Image image;
+        const QUrl url(pdfPath);
+        const QString localPath = url.isLocalFile() ? url.toLocalFile() : pdfPath;
 
-        // Read first page of PDF
-        image.read(pdfPath.toStdString() + "[0]");
-        image.density("150");
+        // Vector density must be configured before ImageMagick rasterizes the
+        // page; changing it after read only alters metadata.
+        ImagePhysicalSize::setVectorReadDensity(image, localPath, 150, 150);
+        image.read(localPath.toStdString() + "[0]");
         image.quality(90);
         image.backgroundColor("white");
         image.alphaChannel(Magick::RemoveAlphaChannel);  // Remove transparency
@@ -81,8 +108,7 @@ bool ImageLoader::isSupportedExtension(const QString &path) {
 
 // Extract metadata for supported image, SVG, or PDF files
 QVariantMap ImageLoader::extractMetadata(const QString &path) {
-    QString ext = getFileExtension(path).toLower();
-    return (ext == "svg") ? inspectSvgOrPdf(path) : inspectImage(path);
+    return inspectImage(path);
 }
 
 
@@ -176,13 +202,19 @@ QVariantMap ImageLoader::inspectImage(const QString &path) {
     meta["size"] = info.size();
     meta["extension"] = "." + ext;
 
-    // Use Magick++ for PDF and TIFF
-    if (ext == "tiff" || ext == "tif" || ext == "pdf") {
+    // Use Magick++ for TIFF and vector documents so density and physical page
+    // dimensions are available to the UI.
+    if (ext == "tiff" || ext == "tif" || ext == "pdf" || ext == "svg") {
         try {
             Image image;
+            if (ext == "pdf")
+                ImagePhysicalSize::setVectorReadDensity(image, localPath, 72, 72);
+            else if (ext == "svg")
+                ImagePhysicalSize::setVectorReadDensity(image, localPath, 96, 96);
             image.read(localPath.toStdString() + (ext == "pdf" ? "[0]" : ""));
             meta["width"] = static_cast<int>(image.columns());
             meta["height"] = static_cast<int>(image.rows());
+            addDensityMetadata(meta, image);
             
             // Estimate channels based on color space
 	    int channelCount = (MagickCompatibility::hasAlphaChannel(image) ? 4 : 3);
@@ -228,6 +260,15 @@ QVariantMap ImageLoader::inspectImage(const QString &path) {
     meta["width"] = w;
     meta["height"] = h;
     meta["channels"] = c;
+
+    try {
+        Image densityProbe;
+        densityProbe.ping(localPath.toStdString());
+        addDensityMetadata(meta, densityProbe);
+    } catch (const Magick::Exception& error) {
+        meta["hasEmbeddedDpi"] = false;
+        qWarning() << "Failed to inspect image density:" << error.what();
+    }
 
     // Color profile inference via heuristic
     QString content(imageData);

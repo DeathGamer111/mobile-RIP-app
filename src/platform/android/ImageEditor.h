@@ -46,7 +46,7 @@ public:
     Q_INVOKABLE bool undo();
     Q_INVOKABLE bool redo();
     Q_INVOKABLE void clearUndoRedoStacks();
-    Q_INVOKABLE bool applyImpositionEdits(const QString& imagePath, int offsetX, int offsetY, QSize paperSize, const QVariantMap& overlayData = {});
+    Q_INVOKABLE bool applyImpositionEdits(const QString& imagePath, int offsetX, int offsetY, QSize paperSize, const QVariantMap& overlayData = {}, double fallbackInputDpi = 720.0);
 
 private:
     QString m_imagePath;

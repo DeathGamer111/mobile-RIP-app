@@ -31,12 +31,14 @@ void PrintJobModelTest::createsEditsAndRemovesJobs()
     QCOMPARE(first.value(QStringLiteral("paperSize")).toSize(), QSize(210, 297));
     QCOMPARE(first.value(QStringLiteral("resolution")).toSize(), QSize(720, 1440));
     QCOMPARE(first.value(QStringLiteral("mediaHeightMm")).toDouble(), -1.0);
+    QCOMPARE(first.value(QStringLiteral("feathering")).toInt(), 2);
 
     QVariantMap update;
     update.insert(QStringLiteral("name"), QStringLiteral("Edited job"));
     update.insert(QStringLiteral("offset"), QPoint(12, 34));
     update.insert(QStringLiteral("whiteStrategy"), QStringLiteral("White Plate"));
     update.insert(QStringLiteral("varnishType"), QStringLiteral("Flood"));
+    update.insert(QStringLiteral("feathering"), 3);
     model.updateJob(0, update);
 
     first = model.getJob(0);
@@ -44,6 +46,7 @@ void PrintJobModelTest::createsEditsAndRemovesJobs()
     QCOMPARE(first.value(QStringLiteral("offset")).toPoint(), QPoint(12, 34));
     QCOMPARE(first.value(QStringLiteral("whiteStrategy")).toString(), QStringLiteral("White Plate"));
     QCOMPARE(first.value(QStringLiteral("varnishType")).toString(), QStringLiteral("Flood"));
+    QCOMPARE(first.value(QStringLiteral("feathering")).toInt(), 3);
 
     model.removeJob(0);
     QCOMPARE(model.rowCount(), 0);
@@ -66,6 +69,7 @@ void PrintJobModelTest::persistsSelectedJobsToJson()
         { QStringLiteral("resolution"), QSize(600, 1200) },
         { QStringLiteral("colorProfile"), QStringLiteral("Test CMYK") },
         { QStringLiteral("mediaHeightMm"), 12.3 },
+        { QStringLiteral("feathering"), 1 },
     });
 
     const QString jsonPath = dir.filePath(QStringLiteral("jobs.json"));
@@ -83,6 +87,7 @@ void PrintJobModelTest::persistsSelectedJobsToJson()
     QCOMPARE(obj.value(QStringLiteral("resolutionHeight")).toInt(), 1200);
     QCOMPARE(obj.value(QStringLiteral("colorProfile")).toString(), QStringLiteral("Test CMYK"));
     QCOMPARE(obj.value(QStringLiteral("mediaHeightMm")).toDouble(), 12.3);
+    QCOMPARE(obj.value(QStringLiteral("feathering")).toInt(), 1);
 }
 
 void PrintJobModelTest::loadsJobsFromJson()
@@ -124,6 +129,8 @@ void PrintJobModelTest::loadsJobsFromJson()
     QCOMPARE(job.value(QStringLiteral("paperSize")).toSize(), QSize(320, 240));
     QCOMPARE(job.value(QStringLiteral("offset")).toPoint(), QPoint(5, 6));
     QCOMPARE(job.value(QStringLiteral("mediaHeightMm")).toDouble(), 7.5);
+    // Older saved jobs did not contain this field and must migrate to Medium.
+    QCOMPARE(job.value(QStringLiteral("feathering")).toInt(), 2);
     QVERIFY(job.value(QStringLiteral("createdAt")).toDateTime().isValid());
 }
 

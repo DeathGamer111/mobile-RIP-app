@@ -101,17 +101,22 @@ add_printflow_qt_test(PrintFlowRipPipelineTest PrintFlow.Rip.PipelineValidation
     ${PROJECT_SOURCE_DIR}/src/rip/MultiInkToneBuilder.h
     ${PROJECT_SOURCE_DIR}/src/rip/MultiInkToneBuilder.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/MultiInkTypes.h
+    ${PROJECT_SOURCE_DIR}/src/rip/ImagePhysicalSize.h
     ${PROJECT_SOURCE_DIR}/src/rip/RasterAlphaMask.h
     ${PROJECT_SOURCE_DIR}/src/rip/RasterAlphaMask.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/X33WhiteToneBuilder.h
     ${PROJECT_SOURCE_DIR}/src/rip/X33WhiteToneBuilder.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/PrintJobMultiInk.h
     ${PROJECT_SOURCE_DIR}/src/rip/PrintJobMultiInk.cpp
+    ${PROJECT_SOURCE_DIR}/src/rip/BoundedRasterPipeline.h
+    ${PROJECT_SOURCE_DIR}/src/rip/BoundedRasterPipeline.cpp
     ${PROJECT_SOURCE_DIR}/src/core/AssetManager.h
     ${PROJECT_SOURCE_DIR}/src/core/AssetManager.cpp
     ${PROJECT_SOURCE_DIR}/src/core/ColorManagementManager.h
     ${PROJECT_SOURCE_DIR}/src/core/ColorManagementManager.cpp
-    ${PROJECT_SOURCE_DIR}/src/core/IPrintOutputClient.h
+        ${PROJECT_SOURCE_DIR}/src/core/IPrintOutputClient.h
+        ${PROJECT_SOURCE_DIR}/src/core/RasterSpool.h
+        ${PROJECT_SOURCE_DIR}/src/core/RasterSpool.cpp
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.h
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.cpp
 )
@@ -133,6 +138,8 @@ qt_add_resources(PrintFlowRipPipelineTest "rip_pipeline_test_resources"
 add_printflow_qt_test(PrintFlowVendorIsolationTest PrintFlow.Vendor.DirectPrintUnavailable
     VendorIsolationTest.cpp
     ${PROJECT_SOURCE_DIR}/src/core/IPrintOutputClient.h
+    ${PROJECT_SOURCE_DIR}/src/core/RasterSpool.h
+    ${PROJECT_SOURCE_DIR}/src/core/RasterSpool.cpp
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiDirectPrintClient.h
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiDirectPrintClient.cpp
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiArmCommandTagCompatibility.h
@@ -178,6 +185,9 @@ endif()
 
 add_printflow_qt_test(PrintFlowNocaiPrnWriterTest PrintFlow.Vendor.NocaiPrnWriter
     NocaiPrnWriterTest.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/IPrintOutputClient.h
+    ${PROJECT_SOURCE_DIR}/src/core/RasterSpool.h
+    ${PROJECT_SOURCE_DIR}/src/core/RasterSpool.cpp
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.h
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.cpp
 )
@@ -198,6 +208,32 @@ add_printflow_qt_test(PrintFlowPrinterServiceProtocolTest
 )
 target_link_libraries(PrintFlowPrinterServiceProtocolTest PRIVATE Qt6::Network)
 
+add_printflow_qt_test(PrintFlowPrinterServiceUploadTest
+    PrintFlow.PrinterService.StreamingUpload
+    PrinterServiceUploadTest.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/IPrintOutputClient.h
+    ${PROJECT_SOURCE_DIR}/src/core/RasterSpool.h
+    ${PROJECT_SOURCE_DIR}/src/core/RasterSpool.cpp
+    ${PROJECT_SOURCE_DIR}/src/printerservice/PrinterServiceProtocol.h
+    ${PROJECT_SOURCE_DIR}/src/printerservice/PrinterServiceProtocol.cpp
+    ${PROJECT_SOURCE_DIR}/src/printerservice/PrinterServiceServer.h
+    ${PROJECT_SOURCE_DIR}/src/printerservice/PrinterServiceServer.cpp
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiDirectPrintClient.h
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiDirectPrintClient.cpp
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiArmCommandTagCompatibility.h
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiArmCommandTagCompatibility.cpp
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiArmStaleSessionRecovery.h
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiArmStaleSessionRecovery.cpp
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiDirectPrintCompatibility.h
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiDirectPrintCompatibility.cpp
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.h
+    ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.cpp
+)
+target_link_libraries(PrintFlowPrinterServiceUploadTest PRIVATE
+    Qt6::Concurrent Qt6::Network ${CMAKE_DL_LIBS})
+set_target_properties(PrintFlowPrinterServiceUploadTest PROPERTIES ENABLE_EXPORTS ON)
+printflow_configure_direct_print_sdk(PrintFlowPrinterServiceUploadTest)
+
 add_executable(PrintFlowPrinterApiSurfaceTest PrinterApiSurfaceTest.cpp)
 target_link_libraries(PrintFlowPrinterApiSurfaceTest PRIVATE
     PrintFlow::PrinterApi Qt6::Test)
@@ -212,10 +248,18 @@ add_printflow_qt_test(PrintFlowCMYKAssetManagerTest PrintFlow.Rip.CMYKAssetManag
     ${PROJECT_SOURCE_DIR}/src/core/ColorManagementManager.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/RasterAlphaMask.h
     ${PROJECT_SOURCE_DIR}/src/rip/RasterAlphaMask.cpp
+    ${PROJECT_SOURCE_DIR}/src/rip/BoundedRasterPipeline.h
+    ${PROJECT_SOURCE_DIR}/src/rip/BoundedRasterPipeline.cpp
+    ${PROJECT_SOURCE_DIR}/src/rip/MultiInkLinearization.h
+    ${PROJECT_SOURCE_DIR}/src/rip/MultiInkLinearization.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/X33WhiteToneBuilder.h
     ${PROJECT_SOURCE_DIR}/src/rip/X33WhiteToneBuilder.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/PrintJobCMYK.h
     ${PROJECT_SOURCE_DIR}/src/rip/PrintJobCMYK.cpp
+    ${PROJECT_SOURCE_DIR}/src/rip/ImagePhysicalSize.h
+    ${PROJECT_SOURCE_DIR}/src/core/IPrintOutputClient.h
+    ${PROJECT_SOURCE_DIR}/src/core/RasterSpool.h
+    ${PROJECT_SOURCE_DIR}/src/core/RasterSpool.cpp
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.h
     ${PROJECT_SOURCE_DIR}/src/vendor/nocai/NocaiPrnWriter.cpp
 )
@@ -226,6 +270,10 @@ target_link_libraries(PrintFlowCMYKAssetManagerTest PRIVATE
     PkgConfig::ImageMagick
     PkgConfig::LCMS
 )
+target_compile_definitions(PrintFlowCMYKAssetManagerTest PRIVATE
+    PRINTFLOW_LEGACY_RASTER_REFERENCE=1
+    PRINTFLOW_TEST_MASK_DIRECTORY="${PROJECT_SOURCE_DIR}/resources/assets/blue_noise_mask_512_12000"
+)
 
 qt_add_resources(PrintFlowCMYKAssetManagerTest "cmyk_asset_test_resources"
     PREFIX "/"
@@ -233,6 +281,8 @@ qt_add_resources(PrintFlowCMYKAssetManagerTest "cmyk_asset_test_resources"
     FILES
         ${RIP_TEST_ASSET_FILES}
 )
+set_tests_properties(PrintFlow.Rip.CMYKAssetManager PROPERTIES
+    ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=3600000")
 
 add_executable(PrintFlowAndroidStubTest
     AndroidStubTest.cpp

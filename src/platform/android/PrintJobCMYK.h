@@ -16,6 +16,8 @@ class PrintJobCMYK : public QObject
 
 signals:
     void prnGenerationFinished(bool success);
+    void outputPhaseChanged(const QString& phase);
+    void outputProgressChanged(qint64 completed, qint64 total);
 
 public:
     explicit PrintJobCMYK(QObject* parent = nullptr);
@@ -25,6 +27,7 @@ public:
 
     Q_INVOKABLE void runPRNGeneration(const QVariantMap& jobMap, const QString& outputPath);
     Q_INVOKABLE void runDirectPrint(const QVariantMap& jobMap);
+    Q_INVOKABLE void cancelOutput();
     Q_INVOKABLE bool loadInputImage(const QString& imagePath);
     Q_INVOKABLE bool applyICCConversion(const QString& inputProfile, const QString& outputProfile);
     Q_INVOKABLE bool generateFinalPRN(const QString& outputPath, int xdpi, int ydpi);

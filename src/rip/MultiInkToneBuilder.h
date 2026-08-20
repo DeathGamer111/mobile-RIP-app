@@ -30,6 +30,7 @@ public:
         // New: optional combo-lut linearization
         const MultiInkLinearization* linearization = nullptr;
         bool enableLinearization = false;
+        bool logConfiguration = true;
     };
 
     using ExternalPlateLoader = std::function<bool(

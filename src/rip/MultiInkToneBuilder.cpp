@@ -425,9 +425,11 @@ bool MultiInkToneBuilder::buildToneChannels(
 
     const GcrParams gcr = getGcrParams(req.modeParams);
 
-    qDebug() << "MultiInkToneBuilder: combo linearization path ="
-             << (useComboLinearization(req) ? "true" : "false")
-             << "mode =" << static_cast<int>(req.mode);
+    if (req.logConfiguration) {
+        qDebug() << "MultiInkToneBuilder: combo linearization path ="
+                 << (useComboLinearization(req) ? "true" : "false")
+                 << "mode =" << static_cast<int>(req.mode);
+    }
 
     switch (req.mode) {
     case InkMode::FourColor_YMCK: {

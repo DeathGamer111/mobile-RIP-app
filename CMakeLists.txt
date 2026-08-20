@@ -29,6 +29,7 @@ set(RIP_CORE_SOURCES
     src/core/ColorManagementManager.h src/core/ColorManagementManager.cpp
     src/core/ImageImportManager.h src/core/ImageImportManager.cpp
     src/core/IPrintOutputClient.h
+    src/core/RasterSpool.h src/core/RasterSpool.cpp
     src/core/PlatformCapabilities.h src/core/PlatformCapabilities.cpp
     src/core/PrintJob.h
     src/core/PrintJobModel.h src/core/PrintJobModel.cpp
@@ -58,11 +59,12 @@ endif()
 
 set(RIP_NATIVE_SOURCES
     src/rip/ColorProfile.h src/rip/ColorProfile.cpp
+    src/rip/BoundedRasterPipeline.h src/rip/BoundedRasterPipeline.cpp
     src/rip/ImageEditor.h src/rip/ImageEditor.cpp
     src/rip/ImageLoader.h src/rip/ImageLoader.cpp
+    src/rip/ImagePhysicalSize.h
     src/rip/MagickCompatibility.h
     src/rip/MultiInkLinearization.h src/rip/MultiInkLinearization.cpp
-    src/rip/MultiInkScreenEngine.h src/rip/MultiInkScreenEngine.cpp
     src/rip/MultiInkToneBuilder.h src/rip/MultiInkToneBuilder.cpp
     src/rip/MultiInkTypes.h
     src/rip/RasterAlphaMask.h src/rip/RasterAlphaMask.cpp
@@ -115,6 +117,7 @@ if(NOT ANDROID)
         src/printerservice/PrinterServiceClient.h
         src/printerservice/PrinterServiceClient.cpp
         src/core/IPrintOutputClient.h
+        src/core/RasterSpool.h src/core/RasterSpool.cpp
     )
     add_library(PrintFlow::PrinterApi ALIAS PrintFlowPrinterApi)
     set_target_properties(PrintFlowPrinterApi PROPERTIES
@@ -243,6 +246,16 @@ else()
     message(STATUS "Selected built-in theme: ${RIP_THEME}")
 endif()
 
+# Use the selected built-in brand for Linux launchers and dock/taskbar icons.
+# Custom themes retain the generic icon unless they are packaged separately.
+set(RIP_APPLICATION_ICON_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/assets/logo.png")
+if(NOT RIP_THEME_FILE AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/themes/${RIP_THEME}/assets/logo.png")
+    set(RIP_APPLICATION_ICON_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/themes/${RIP_THEME}/assets/logo.png")
+endif()
+
 target_compile_definitions(PrintFlow PRIVATE
     RIP_SELECTED_THEME_RESOURCE="${RIP_SELECTED_THEME_RESOURCE}"
 )
@@ -268,6 +281,7 @@ if(NOT ANDROID)
         src/printerservice/PrinterServiceServer.h src/printerservice/PrinterServiceServer.cpp
         src/printerservice/PrinterServiceProtocol.h src/printerservice/PrinterServiceProtocol.cpp
         src/core/IPrintOutputClient.h
+        src/core/RasterSpool.h src/core/RasterSpool.cpp
         ${PRINTFLOW_DIRECT_PRINT_BACKEND_SOURCES}
     )
     add_executable(PrintFlowPrinterService ${PRINTFLOW_PRINTER_SERVICE_SOURCES})
@@ -299,6 +313,7 @@ set(RIP_ASSET_FILES
     resources/assets/RIP_App_1200_4C.icc
     resources/assets/RIP_App_Linearization_1200_4C.xml
     resources/assets/RIP_App_Linearization_1200_8C.xml
+    resources/assets/RIP_App_Linearization_1440_X-33.xml
     resources/assets/RIP_App_Generic_CMYK.icc
     resources/assets/sRGBProfile.icm
 )
@@ -419,9 +434,9 @@ endif()
 if(UNIX AND NOT ANDROID)
     install(FILES resources/packaging/linux/printflow.desktop
         DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/applications")
-    install(FILES resources/assets/logo.png
+    install(FILES "${RIP_APPLICATION_ICON_SOURCE}"
         DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/256x256/apps"
-        RENAME PrintFlow.png)
+        RENAME printflow.png)
 
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set(PRINTFLOW_PACKAGE_ARCH x86_64)

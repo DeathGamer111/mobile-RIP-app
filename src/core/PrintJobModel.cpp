@@ -39,6 +39,7 @@ QVariant PrintJobModel::data(const QModelIndex &index, int role) const {
     case MediaHeightMmRole: return job.mediaHeightMm;
     case ResolutionRole: return QVariant::fromValue(job.resolution);
     case OffsetRole: return QVariant::fromValue(job.offset);
+    case FeatheringRole: return job.feathering;
     case WhiteStrategyRole: return job.whiteStrategy;
     case VarnishTypeRole: return job.varnishType;
     case ColorProfileRole: return job.colorProfile;
@@ -60,6 +61,7 @@ QHash<int, QByteArray> PrintJobModel::roleNames() const {
         {MediaHeightMmRole, "mediaHeightMm"},
         {ResolutionRole, "resolution"},
         {OffsetRole, "offset"},
+        {FeatheringRole, "feathering"},
         {WhiteStrategyRole, "whiteStrategy"},
         {VarnishTypeRole, "varnishType"},
         {ColorProfileRole, "colorProfile"},
@@ -80,6 +82,7 @@ PrintJob PrintJobModel::makeDefaultJob(const QString &name) const
     job.mediaHeightMm = -1.0;           // Preserve the printer's current height until enabled.
     job.resolution = QSize(720, 1440);	// RIP default DPI.
     job.offset = QPoint(0, 0);
+    job.feathering = 2;                 // Medium SDK feathering.
     job.whiteStrategy = "None";
     job.varnishType = "None";
     job.colorProfile = "sRGB";
@@ -151,6 +154,7 @@ QVariantMap PrintJobModel::getJob(int index) const {
     map["mediaHeightMm"] = job.mediaHeightMm;
     map["resolution"] = QVariant::fromValue(job.resolution);
     map["offset"] = QVariant::fromValue(job.offset);
+    map["feathering"] = job.feathering;
     map["whiteStrategy"] = job.whiteStrategy;
     map["varnishType"] = job.varnishType;
     map["colorProfile"] = job.colorProfile;
@@ -177,6 +181,8 @@ void PrintJobModel::updateJob(int index, const QVariantMap &jobData) {
         job.mediaHeightMm = std::clamp(jobData.value("mediaHeightMm").toDouble(), -1.0, 152.0);
     if (jobData.contains("resolution"))    job.resolution = jobData.value("resolution").toSize();
     if (jobData.contains("offset"))        job.offset = jobData.value("offset").toPoint();
+    if (jobData.contains("feathering"))
+        job.feathering = std::clamp(jobData.value("feathering").toInt(), 1, 3);
 
     if (jobData.contains("whiteStrategy")) job.whiteStrategy = jobData.value("whiteStrategy").toString();
     if (jobData.contains("varnishType"))   job.varnishType = jobData.value("varnishType").toString();
@@ -283,7 +289,24 @@ bool PrintJobModel::validateImportedSource(const QString &localPath, const QStri
         return QFileInfo::exists(localPath);
 
     QImageReader reader(localPath);
-    return reader.canRead();
+    if (reader.canRead())
+        return true;
+
+    // Qt's Android image plugins do not include a TIFF decoder. The native
+    // RIP validates and decodes TIFF through ImageMagick, so accept a TIFF
+    // here only when its byte-order/version signature is well formed.
+    if (extension == QStringLiteral("tif") || extension == QStringLiteral("tiff")) {
+        QFile file(localPath);
+        if (!file.open(QIODevice::ReadOnly))
+            return false;
+        const QByteArray signature = file.read(4);
+        return signature == QByteArray("II\x2a\0", 4)
+            || signature == QByteArray("MM\0\x2a", 4)
+            || signature == QByteArray("II\x2b\0", 4)
+            || signature == QByteArray("MM\0\x2b", 4);
+    }
+
+    return false;
 }
 
 
@@ -317,6 +340,9 @@ void PrintJobModel::loadFromJson(const QString &filePath) {
         job.resolution = QSize(obj["resolutionWidth"].toInt(), obj["resolutionHeight"].toInt());
         job.offset.setX(obj["offsetX"].toInt());
         job.offset.setY(obj["offsetY"].toInt());
+        job.feathering = obj.contains("feathering")
+            ? std::clamp(obj["feathering"].toInt(2), 1, 3)
+            : 2;
 
         job.whiteStrategy = obj["whiteStrategy"].toString();
         job.varnishType = obj["varnishType"].toString();
@@ -412,6 +438,7 @@ void PrintJobModel::saveToJson(const QString &filePath, const QList<int> &select
         obj["resolutionHeight"] = job.resolution.height();
         obj["offsetX"] = job.offset.x();
         obj["offsetY"] = job.offset.y();
+        obj["feathering"] = job.feathering;
         obj["whiteStrategy"] = job.whiteStrategy;
         obj["varnishType"] = job.varnishType;
         obj["colorProfile"] = job.colorProfile;

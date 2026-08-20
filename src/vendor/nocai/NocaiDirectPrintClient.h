@@ -5,17 +5,22 @@
 #include <QString>
 #include <QStringList>
 #include <QLibrary>
+#include <QMutex>
 #include <QRecursiveMutex>
 #include <QFutureWatcher>
 
 #include <cstdint>
+#include <atomic>
 #include <functional>
 #include <type_traits>
 #include <vector>
 
 #include "IPrintOutputClient.h"
+#include "RasterSpool.h"
 
-class NocaiDirectPrintClient : public QObject, public IPrintOutputClient
+class NocaiDirectPrintClient : public QObject,
+                               public IPrintOutputClient,
+                               public ISpooledPrintOutputClient
 {
     Q_OBJECT
     Q_PROPERTY(bool available READ isAvailable NOTIFY statusChanged)
@@ -48,6 +53,7 @@ public:
     Q_INVOKABLE bool refreshPrinters();
     Q_INVOKABLE bool choosePrinter(int index);
     Q_INVOKABLE bool abortPrint();
+    Q_INVOKABLE void cancelCurrentOutput();
     Q_INVOKABLE bool pausePrint();
     Q_INVOKABLE bool continuePrint();
     Q_INVOKABLE QString statusText();
@@ -96,8 +102,13 @@ public:
 
     bool submitPreparedJob(const DirectPrintRaster& raster,
                            const DirectPrintSettings& settings) override;
+    void setSpoolProgressCallback(ProgressCallback callback) override;
+    bool submitSpooledJob(const DirectPrintSpool& spool,
+                          const DirectPrintSettings& settings) override;
     bool printPackedJob(const DirectPrintRaster& raster,
                         const DirectPrintSettings& settings);
+    bool printSpooledJob(const DirectPrintSpool& spool,
+                         const DirectPrintSettings& settings);
     static int runSerializedPrintWorker(const QString& jobPath);
 
 signals:
@@ -175,6 +186,8 @@ private:
     QString controllerErrorDetails() const;
     bool submitPreparedJobIsolated(const DirectPrintRaster& raster,
                                    const DirectPrintSettings& settings);
+    bool submitSpooledJobIsolated(const DirectPrintSpool& spool,
+                                  const DirectPrintSettings& settings);
     QVariantMap executeMaintenanceAction(const QString& action,
                                          const QVariantMap& arguments);
 
@@ -244,4 +257,10 @@ private:
     const int* m_sdkUartError = nullptr;
     const int* m_sdkErrorSlice = nullptr;
     const int* m_sdkErrorSwath = nullptr;
+    PrintFlowRasterSpool::Reader* m_activeSpoolReader = nullptr;
+    ProgressCallback m_spoolProgressCallback;
+    std::atomic_bool m_cancelRequested{false};
+    QMutex m_cancelFileMutex;
+    QString m_isolatedCancelFilePath;
+    QString m_workerCancelFilePath;
 };

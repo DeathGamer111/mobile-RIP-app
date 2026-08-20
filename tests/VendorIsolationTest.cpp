@@ -1,6 +1,7 @@
 #include "NocaiDirectPrintClient.h"
 #include "NocaiDirectPrintCompatibility.h"
 #include "NocaiPrnWriter.h"
+#include "RasterSpool.h"
 
 #include <QtTest/QtTest>
 #include <QDir>
@@ -48,7 +49,7 @@ void VendorIsolationTest::directPrintUnavailablePathFailsCleanly()
     QVERIFY(!outputClient->submitPreparedJob(raster, settings));
     QVERIFY(!outputClient->lastError().isEmpty());
     QVERIFY(client.supportsMaintenance(QStringLiteral("X-33")));
-    QVERIFY(!client.supportsMaintenance(QStringLiteral("X-36NC (Photo Printer)")));
+    QVERIFY(!client.supportsMaintenance(QStringLiteral("X-36 Studio")));
 }
 
 void VendorIsolationTest::missingSdkEnvironmentIsNotRequired()
@@ -57,8 +58,11 @@ void VendorIsolationTest::missingSdkEnvironmentIsNotRequired()
 
     NocaiDirectPrintClient client;
     QVERIFY(!client.vendorName().isEmpty());
-    QVERIFY(!client.isAvailable());
-    QVERIFY(!client.lastError().isEmpty());
+    // Packaged builds and some test targets stage the architecture-matched
+    // SDK beside the executable. Absence of an environment override must work
+    // in both cases: auto-discover it when present, or fail with a normal error.
+    if (!client.isAvailable())
+        QVERIFY(!client.lastError().isEmpty());
 }
 
 void VendorIsolationTest::mangledCompatibilitySymbolsAreSupported()
@@ -111,8 +115,9 @@ void VendorIsolationTest::mangledCompatibilitySymbolsAreSupported()
     DirectPrintSettings settings;
     settings.printerIndex = 0;
     // Reproduce a persisted bidirectional selection. The x64 SDK's legacy
-    // X-33 path must override this to its proven-safe left-to-right mode.
+    // X-33 path must override this to the validated left-to-right mode.
     settings.printDirection = 0;
+    settings.eclosionGrade = 2;
     // CPrinter_Model_X33's generic two-head configuration maps to selection 0.
     settings.headSelect = 0;
     settings.mediaHeightMm = 5.5;
@@ -133,8 +138,33 @@ void VendorIsolationTest::mangledCompatibilitySymbolsAreSupported()
     QVERIFY2(printClient.isAvailable(), qPrintable(printClient.lastError()));
     QVERIFY2(printClient.refreshPrinters(), qPrintable(printClient.lastError()));
     QVERIFY(!printClient.isConnected());
-    QVERIFY2(printClient.submitPreparedJob(raster, settings),
+    QTemporaryDir spoolDirectory;
+    QVERIFY(spoolDirectory.isValid());
+    DirectPrintSpool spoolMetadata;
+    spoolMetadata.logicalChannelCount = int(packedLines.size());
+    spoolMetadata.channelOrder = raster.channelOrder;
+    spoolMetadata.width = raster.width;
+    spoolMetadata.height = raster.height;
+    spoolMetadata.xdpi = raster.xdpi;
+    spoolMetadata.ydpi = raster.ydpi;
+    spoolMetadata.bytesPerLine = raster.bytesPerLine;
+    spoolMetadata.format = raster.format;
+    spoolMetadata.canonicalHeader = raster.canonicalHeader;
+    PrintFlowRasterSpool::Writer spoolWriter;
+    QString spoolError;
+    QVERIFY2(spoolWriter.create(spoolDirectory.path(), spoolMetadata, &spoolError),
+             qPrintable(spoolError));
+    for (int channel = 0; channel < int(packedLines.size()); ++channel) {
+        const auto& line = packedLines[size_t(channel)][0];
+        QVERIFY2(spoolWriter.writeLine(channel, 0, line.data(),
+                                       qsizetype(line.size()), &spoolError),
+                 qPrintable(spoolError));
+    }
+    DirectPrintSpool spool;
+    QVERIFY2(spoolWriter.finalize(&spool, &spoolError), qPrintable(spoolError));
+    QVERIFY2(printClient.submitSpooledJob(spool, settings),
              qPrintable(printClient.lastError()));
+    PrintFlowRasterSpool::remove(spool);
     QVERIFY(printClient.isConnected());
     QVariantMap restoredOrigin = printClient.getPrintXYValue();
     QVERIFY2(restoredOrigin.value("ok").toBool(),

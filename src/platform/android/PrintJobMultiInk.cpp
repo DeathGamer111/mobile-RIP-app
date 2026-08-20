@@ -33,6 +33,8 @@ void PrintJobMultiInk::runDirectPrint(const QVariantMap& jobMap)
     emit prnGenerationFinished(false);
 }
 
+void PrintJobMultiInk::cancelOutput() {}
+
 void PrintJobMultiInk::setColorManager(ColorManagementManager* mgr) { m_colorManager = mgr; }
 void PrintJobMultiInk::setDirectPrintClient(IPrintOutputClient* client) { m_directPrintClient = client; }
 

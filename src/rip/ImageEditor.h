@@ -67,7 +67,7 @@ public:
 	
 	// Imposition updates
     // overlayData keys (optional): text, textX, textY, rectX, rectY, rectW, rectH, strokeWidth, etc.
-	Q_INVOKABLE bool applyImpositionEdits(const QString &imagePath, int offsetX, int offsetY, QSize paperSize, const QVariantMap &overlayData = {});
+	Q_INVOKABLE bool applyImpositionEdits(const QString &imagePath, int offsetX, int offsetY, QSize paperSize, const QVariantMap &overlayData = {}, double fallbackInputDpi = 720.0);
 
 
 private:

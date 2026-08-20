@@ -15,6 +15,8 @@ public:
 
     bool copyResourceIfMissing(const QString& resourcePath, const QString& fileName);
     bool copyResourcesIfMissing(const QStringList& resourcePaths, const QStringList& fileNames);
+    bool syncResource(const QString& resourcePath, const QString& fileName);
+    bool syncResources(const QStringList& resourcePaths, const QStringList& fileNames);
 
     bool cleanup();
 

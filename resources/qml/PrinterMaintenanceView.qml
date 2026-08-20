@@ -23,6 +23,7 @@ Page {
     property int headMask: 3
     property int activeMotionAxis: 0
     property int activeMotionDirection: 0
+    property string activeMotionLabel: ""
     property bool axisMotionActive: false
     property bool axisMotionHeld: false
     property bool axisStopRequested: false
@@ -300,23 +301,20 @@ Page {
         root.axisMotionHeld = false;
         root.axisStopRequested = false;
         root.axisHomeRequested = false;
+        root.activeMotionLabel = "";
         motionSafetyTimer.stop();
     }
 
-    function beginAxisMotion(axis, direction, label) {
-        if (root.axisMotionActive || nocaiDirectPrint.maintenanceBusy)
+    function sendAxisMotionPulse() {
+        if (!root.axisMotionActive || !root.axisMotionHeld
+                || root.axisStopRequested || root.axisHomeRequested
+                || nocaiDirectPrint.maintenanceBusy)
             return false;
 
-        root.activeMotionAxis = axis;
-        root.activeMotionDirection = direction;
-        root.axisMotionActive = true;
-        root.axisMotionHeld = true;
-        root.axisStopRequested = false;
-        root.axisHomeRequested = false;
-        motionSafetyTimer.restart();
-
-        const started = root.runAsyncAction(
-            label, "MoveAxis", {"axis": axis, "direction": direction},
+        return root.runAsyncAction(
+            root.activeMotionLabel, "MoveAxis",
+            {"axis": root.activeMotionAxis,
+             "direction": root.activeMotionDirection},
             false, function (result, ok) {
                 if (!ok) {
                     root.clearAxisMotionState();
@@ -328,6 +326,22 @@ Page {
                     Qt.callLater(root.stopActiveAxis);
                 }
             }, false, false);
+    }
+
+    function beginAxisMotion(axis, direction, label) {
+        if (root.axisMotionActive || nocaiDirectPrint.maintenanceBusy)
+            return false;
+
+        root.activeMotionAxis = axis;
+        root.activeMotionDirection = direction;
+        root.activeMotionLabel = label;
+        root.axisMotionActive = true;
+        root.axisMotionHeld = true;
+        root.axisStopRequested = false;
+        root.axisHomeRequested = false;
+        motionSafetyTimer.restart();
+
+        const started = root.sendAxisMotionPulse();
         if (!started)
             root.clearAxisMotionState();
         return started;
@@ -497,6 +511,18 @@ Page {
         running: root.visible && root.controlsEnabled && root.statusPollingEnabled
                  && !root.axisMotionActive && !root.userScrolling
         onTriggered: root.updateStatus(true)
+    }
+
+    Timer {
+        id: motionKeepAliveTimer
+        interval: 500
+        repeat: true
+        running: root.axisMotionActive && root.axisMotionHeld
+                 && !root.axisStopRequested && !root.axisHomeRequested
+        onTriggered: {
+            if (!nocaiDirectPrint.maintenanceBusy)
+                root.sendAxisMotionPulse();
+        }
     }
 
     Timer {

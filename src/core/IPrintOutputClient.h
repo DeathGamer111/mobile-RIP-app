@@ -1,15 +1,18 @@
 #pragma once
 
+#include <QByteArray>
 #include <QString>
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 enum class DirectPrintRasterFormat : uint8_t
 {
     Unspecified = 0,
-    NocaiX33Standard = 1
+    NocaiX33Standard = 1,
+    NocaiMultiInk = 2
 };
 
 struct DirectPrintSettings
@@ -18,7 +21,7 @@ struct DirectPrintSettings
     int printDirection = 0;
     int printSpeed = 1;
     int wcSequence = 0;
-    int eclosionGrade = 0;
+    int eclosionGrade = 2;
     // CPrinter_Model_X33 initializes as the generic two-head configuration,
     // which its legacy settings translation maps to selection 0.
     int headSelect = 0;
@@ -62,6 +65,27 @@ struct DirectPrintRaster
     std::array<uint32_t, 12> canonicalHeader{};
 };
 
+// A finalized, checksummed raster stored outside the process heap. Logical
+// channel planes are channel-major in the spool; channelOrder supplies the
+// physical row order expected by the printer and may repeat a logical plane
+// (the X-33 white path uses YMCKWW).
+struct DirectPrintSpool
+{
+    QString path;
+    std::vector<int> channelOrder;
+    int logicalChannelCount = 0;
+    int width = 0;
+    int height = 0;
+    int xdpi = 0;
+    int ydpi = 0;
+    int bytesPerLine = 0;
+    DirectPrintRasterFormat format = DirectPrintRasterFormat::Unspecified;
+    std::array<uint32_t, 12> canonicalHeader{};
+    quint64 bodyOffset = 0;
+    quint64 bodyBytes = 0;
+    QByteArray sha256;
+};
+
 class IPrintOutputClient
 {
 public:
@@ -72,4 +96,18 @@ public:
     virtual QString lastError() const = 0;
     virtual bool submitPreparedJob(const DirectPrintRaster& raster,
                                    const DirectPrintSettings& settings) = 0;
+};
+
+// Optional extension kept separate from IPrintOutputClient so existing users
+// of the public printer API do not acquire a new pure virtual function.
+class ISpooledPrintOutputClient
+{
+public:
+    using ProgressCallback = std::function<void(
+        const QString& phase, qint64 completed, qint64 total)>;
+
+    virtual ~ISpooledPrintOutputClient() = default;
+    virtual void setSpoolProgressCallback(ProgressCallback callback) = 0;
+    virtual bool submitSpooledJob(const DirectPrintSpool& spool,
+                                  const DirectPrintSettings& settings) = 0;
 };

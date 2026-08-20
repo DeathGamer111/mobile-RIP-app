@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "IPrintOutputClient.h"
+
 class NocaiPrnWriter
 {
 public:
@@ -66,6 +68,10 @@ public:
         int ydpi,
         const QString& outputPath);
 
+    static bool writeStandardX33Prn(
+        const DirectPrintSpool& spool,
+        const QString& outputPath);
+
     static bool writeMultiInkPrn(
         const std::vector<std::vector<std::vector<uint8_t>>>& packedLines,
         const std::vector<int>& channelOrder,
@@ -75,5 +81,10 @@ public:
         int xdpi,
         int ydpi,
         int bytesPerLine,
+        const QString& outputPath);
+
+    static bool writeMultiInkPrn(
+        const DirectPrintSpool& spool,
+        MultiInkMode mode,
         const QString& outputPath);
 };

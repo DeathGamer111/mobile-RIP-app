@@ -41,6 +41,8 @@ void PrintJobCMYK::runDirectPrint(const QVariantMap& jobMap)
     emit prnGenerationFinished(false);
 }
 
+void PrintJobCMYK::cancelOutput() {}
+
 bool PrintJobCMYK::loadInputImage(const QString& imagePath) { Q_UNUSED(imagePath) return unavailable("Image loading for PRN"); }
 bool PrintJobCMYK::applyICCConversion(const QString& inputProfile, const QString& outputProfile) { Q_UNUSED(inputProfile) Q_UNUSED(outputProfile) return unavailable("ICC conversion for PRN"); }
 bool PrintJobCMYK::generateFinalPRN(const QString& outputPath, int xdpi, int ydpi) { Q_UNUSED(outputPath) Q_UNUSED(xdpi) Q_UNUSED(ydpi) return unavailable("Final PRN generation"); }

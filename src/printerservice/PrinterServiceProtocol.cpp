@@ -214,6 +214,81 @@ QVariantMap rasterMetadata(const DirectPrintRaster& raster)
     };
 }
 
+QVariantMap spoolMetadata(const DirectPrintSpool& spool)
+{
+    QVariantList channels;
+    for (const int channel : spool.channelOrder)
+        channels.append(channel);
+    QVariantList header;
+    for (const uint32_t word : spool.canonicalHeader)
+        header.append(qulonglong(word));
+    return {
+        {QStringLiteral("width"), spool.width},
+        {QStringLiteral("height"), spool.height},
+        {QStringLiteral("xdpi"), spool.xdpi},
+        {QStringLiteral("ydpi"), spool.ydpi},
+        {QStringLiteral("bytesPerLine"), spool.bytesPerLine},
+        {QStringLiteral("format"), int(spool.format)},
+        {QStringLiteral("logicalChannelCount"), spool.logicalChannelCount},
+        {QStringLiteral("channels"), channels},
+        {QStringLiteral("canonicalHeader"), header},
+        {QStringLiteral("bodyOffset"), qulonglong(spool.bodyOffset)},
+        {QStringLiteral("bodyBytes"), qulonglong(spool.bodyBytes)},
+        {QStringLiteral("sha256"), spool.sha256},
+    };
+}
+
+bool spoolMetadataFromMap(const QVariantMap& map, DirectPrintSpool* spool,
+                          QString* errorMessage)
+{
+    if (!spool) {
+        setError(errorMessage, QStringLiteral("Raster spool destination is null."));
+        return false;
+    }
+    DirectPrintSpool value;
+    value.width = map.value(QStringLiteral("width")).toInt();
+    value.height = map.value(QStringLiteral("height")).toInt();
+    value.xdpi = map.value(QStringLiteral("xdpi")).toInt();
+    value.ydpi = map.value(QStringLiteral("ydpi")).toInt();
+    value.bytesPerLine = map.value(QStringLiteral("bytesPerLine")).toInt();
+    value.logicalChannelCount = map.value(
+        QStringLiteral("logicalChannelCount")).toInt();
+    value.bodyOffset = map.value(QStringLiteral("bodyOffset")).toULongLong();
+    value.bodyBytes = map.value(QStringLiteral("bodyBytes")).toULongLong();
+    value.sha256 = map.value(QStringLiteral("sha256")).toByteArray();
+    const int format = map.value(QStringLiteral("format")).toInt();
+    if (format < int(DirectPrintRasterFormat::Unspecified) ||
+        format > int(DirectPrintRasterFormat::NocaiMultiInk)) {
+        setError(errorMessage, QStringLiteral("Raster spool format is invalid."));
+        return false;
+    }
+    value.format = static_cast<DirectPrintRasterFormat>(format);
+    const QVariantList channels = map.value(QStringLiteral("channels")).toList();
+    for (const QVariant& item : channels)
+        value.channelOrder.push_back(item.toInt());
+    const QVariantList header = map.value(
+        QStringLiteral("canonicalHeader")).toList();
+    if (header.size() != int(value.canonicalHeader.size())) {
+        setError(errorMessage, QStringLiteral("Raster spool canonical header is invalid."));
+        return false;
+    }
+    for (int index = 0; index < header.size(); ++index)
+        value.canonicalHeader[size_t(index)] = header[index].toUInt();
+    if (value.sha256.size() != 32 || value.bodyOffset == 0 ||
+        value.bodyBytes == 0 || value.channelOrder.empty()) {
+        setError(errorMessage, QStringLiteral("Raster spool metadata is incomplete."));
+        return false;
+    }
+    for (const int channel : value.channelOrder) {
+        if (channel < 0 || channel >= value.logicalChannelCount) {
+            setError(errorMessage, QStringLiteral("Raster spool channel order is invalid."));
+            return false;
+        }
+    }
+    *spool = std::move(value);
+    return true;
+}
+
 bool serializeRaster(const DirectPrintRaster& raster, QByteArray* payload,
                      QString* errorMessage)
 {
@@ -269,7 +344,7 @@ bool deserializeRaster(
     value.bytesPerLine = metadata.value(QStringLiteral("bytesPerLine")).toInt();
     const int format = metadata.value(QStringLiteral("format")).toInt();
     if (format < int(DirectPrintRasterFormat::Unspecified) ||
-        format > int(DirectPrintRasterFormat::NocaiX33Standard)) {
+        format > int(DirectPrintRasterFormat::NocaiMultiInk)) {
         setError(errorMessage, QStringLiteral("Direct-print raster format is invalid."));
         return false;
     }

@@ -18,6 +18,7 @@ struct PrintJob {
     double mediaHeightMm = -1.0; // Optional, in 0.1 mm increments; -1 keeps current height
     QSize resolution;           // Output resolution (DPI)
     QPoint offset;              // Position offset on page
+    int feathering = 2;         // Unitless SDK eclosion grade: 1=low, 2=medium, 3=high
 
     QString whiteStrategy;      // Strategy for white ink printing
     QString varnishType;        // Type of varnish applied

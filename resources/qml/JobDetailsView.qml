@@ -54,6 +54,11 @@ Item {
         { label: strings.trKey("color.option.flood"), value: "Flood" },
         { label: strings.trKey("color.option.plate"), value: "Plate" }
     ])
+    property var featheringOptions: (strings.language, [
+        { label: strings.trKey("feathering.low"), value: 1 },
+        { label: strings.trKey("feathering.medium"), value: 2 },
+        { label: strings.trKey("feathering.high"), value: 3 }
+    ])
 
     width: parent ? parent.width : 450
     height: parent ? parent.height : 600
@@ -329,20 +334,18 @@ Item {
     }
 
 
-	// Compute approximate printed size using selected X DPI (from the dropdown).
-	// (We assume X DPI governs physical size for width; you can also show Y if you want.)
+	// Compute physical size from the artwork density. Files without trustworthy
+	// density retain the legacy baseline for the selected printer family.
 	function updatePrintedSize() {
 		const wPx = imageMeta.width || 0
 		const hPx = imageMeta.height || 0
+		const fallbackDpi = usingMultiInk ? 600 : 720
+		const inputXDpi = imageMeta.hasEmbeddedDpi ? imageMeta.xDpi : fallbackDpi
+		const inputYDpi = imageMeta.hasEmbeddedDpi ? imageMeta.yDpi : fallbackDpi
 
-		// Physical size uses a fixed base DPI per printer family:
-		// - Nocai: 720 baseline
-		// - MultiInk: 600 baseline
-		const effectiveDpi = usingMultiInk ? 600 : 720
-
-		if (wPx > 0 && hPx > 0 && effectiveDpi > 0) {
-		    const printedWmm = ((wPx * 25.4) / effectiveDpi).toFixed(1)
-		    const printedHmm = ((hPx * 25.4) / effectiveDpi).toFixed(1)
+		if (wPx > 0 && hPx > 0 && inputXDpi > 0 && inputYDpi > 0) {
+		    const printedWmm = ((wPx * 25.4) / inputXDpi).toFixed(1)
+		    const printedHmm = ((hPx * 25.4) / inputYDpi).toFixed(1)
 
 		    printedSizeDisplay = strings.trKey("jobDetails.printedSize.prefix")
                                  + printedWmm + " mm × " + printedHmm + " mm"
@@ -454,25 +457,26 @@ Item {
 					    Layout.preferredWidth: root.theme.headerButtonWidth(root.width)
 					    padding: 12
 					    font.pixelSize: 15
-					    onClicked: {
-				        jobModel.updateJob(jobIndex, {
-				            name: jobNameField.text,
-				            imagePath: jobData.imagePath,
+				    onClicked: {
+			        jobModel.updateJob(jobIndex, {
+			            name: jobNameField.text,
+			            imagePath: jobData.imagePath,
 			            paperSize: jobData.paperSize,
 			            mediaHeightMm: mediaHeightEnabled.checked ? mediaHeightSpin.value / 10.0 : -1,
 			            resolution: (function() {
-				                let parts = resolutionComboBox.currentText.split("x")
-				                return (parts.length === 2)
-				                    ? Qt.size(parseInt(parts[0]), parseInt(parts[1]))
-				                    : Qt.size(720, usingMultiInk ? 1200 : 1440)
-				            })(),
-				            offset: Qt.point(offsetXSpin.value, offsetYSpin.value),
-					            whiteStrategy: selectedOptionValue(whiteBox, whiteModeOptions),
-					            varnishType: selectedOptionValue(varnishBox, varnishModeOptions),
-				            colorProfile: profileBox.currentText,
-		                    whitePlatePath: whitePlatePath,
-					        varnishPlatePath: varnishPlatePath
-				        })
+			                let parts = resolutionComboBox.currentText.split("x")
+			                return (parts.length === 2)
+			                    ? Qt.size(parseInt(parts[0]), parseInt(parts[1]))
+			                    : Qt.size(720, usingMultiInk ? 1200 : 1440)
+			            })(),
+			            offset: Qt.point(offsetXSpin.value, offsetYSpin.value),
+			            feathering: selectedOptionValue(featheringBox, featheringOptions),
+			            whiteStrategy: selectedOptionValue(whiteBox, whiteModeOptions),
+			            varnishType: selectedOptionValue(varnishBox, varnishModeOptions),
+			            colorProfile: profileBox.currentText,
+			            whitePlatePath: whitePlatePath,
+			            varnishPlatePath: varnishPlatePath
+			        })
 				        toast.show(strings.trKey("jobDetails.saved"))
 				    }
 				}
@@ -643,9 +647,10 @@ Item {
 							stackView.push("qrc:/qml/ImpositionView.qml", {
 								"jobIndex": jobIndex,
 								"jobModel": jobModel,
-								"stackView": stackView,
-								"initialImagePath": imagePath,
-								"theme": root.theme
+									"stackView": stackView,
+									"initialImagePath": imagePath,
+									"fallbackInputDpi": usingMultiInk ? 600 : 720,
+									"theme": root.theme
 							})
 	                    }
                 }
@@ -812,7 +817,7 @@ Item {
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                 }
-								
+
 				// Calculated printed size hint for the user.
 				Label {
 					id: printedSizeLabel
@@ -850,7 +855,22 @@ Item {
                     }
                 }
 
-				Label { text: strings.trKey("jobDetails.whiteMode") }
+                Label { text: strings.trKey("jobDetails.feathering") }
+                ComboBox {
+                    id: featheringBox
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: parent.width
+                    model: root.featheringOptions
+                    textRole: "label"
+                    currentIndex: optionIndexForValue(
+                        root.featheringOptions,
+                        jobData.feathering !== undefined ? jobData.feathering : 2)
+                    onActivated: jobData.feathering = selectedOptionValue(
+                        featheringBox, root.featheringOptions)
+                }
+
+					Label { text: strings.trKey("jobDetails.whiteMode") }
 				ComboBox {
 					id: whiteBox
 					Layout.fillWidth: true

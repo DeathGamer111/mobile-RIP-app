@@ -35,6 +35,11 @@ Page {
     property int draftDisableUv3: appState.sdkDisableUv3
     property int draftDisableUv4: appState.sdkDisableUv4
     property int draftDisableUv5: appState.sdkDisableUv5
+    property var featheringOptions: (strings.language, [
+        { label: strings.trKey("feathering.low"), value: 1 },
+        { label: strings.trKey("feathering.medium"), value: 2 },
+        { label: strings.trKey("feathering.high"), value: 3 }
+    ])
 
     readonly property bool operationBusy: nocaiDirectPrint.maintenanceBusy
     readonly property bool canApply: nocaiDirectPrint.connected && !operationBusy
@@ -352,7 +357,13 @@ Page {
                         Label { text: strings.trKey("printerSettings.wcSequence"); color: theme.text; Layout.fillWidth: true }
                         SpinBox { Layout.fillWidth: true; from: 0; to: 1; value: root.draftWcSequence; onValueModified: root.draftWcSequence = value }
                         Label { text: strings.trKey("printerSettings.eclosionGrade"); color: theme.text; Layout.fillWidth: true }
-                        SpinBox { Layout.fillWidth: true; from: 0; to: 3; value: root.draftEclosionGrade; onValueModified: root.draftEclosionGrade = value }
+                        ComboBox {
+                            Layout.fillWidth: true
+                            model: root.featheringOptions
+                            textRole: "label"
+                            currentIndex: Math.max(0, Math.min(2, root.draftEclosionGrade - 1))
+                            onActivated: root.draftEclosionGrade = root.featheringOptions[currentIndex].value
+                        }
                         Label { text: strings.trKey("printerSettings.headSelect"); color: theme.text; Layout.fillWidth: true }
                         SpinBox { Layout.fillWidth: true; from: 0; to: 2; value: root.draftHeadSelect; onValueModified: root.draftHeadSelect = value }
                         Label { text: strings.trKey("printerSettings.headVoltage"); color: theme.text; Layout.fillWidth: true }

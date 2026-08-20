@@ -9,7 +9,7 @@ Direct printing is intentionally split by printer raster family:
 
 - **Legacy standard CMYK (`X-33`)** uses the current PROII SDK and
   `PrintJobCMYK`.
-- **Newer MultiInk (`X-36NC`)** uses `PrintJobMultiInk` and has a separate
+- **Newer MultiInk (`X-36 Studio`, vendor model `X-36NC`)** uses `PrintJobMultiInk` and has a separate
   persisted SDK root. Auto-discovery is disabled for this family so it cannot
   accidentally load the X-33 SDK. Its direct path becomes available when the
   newer-model SDK and its adapter are supplied.
@@ -60,10 +60,21 @@ versus color-under ordering in the legacy job settings.
 The July 2026 Linux x86-64 SDK has a reproducible defect in its X-33
 bidirectional (`PrintDirection=0`) swath formatter. Near the sixth swath it
 computes a negative reverse-direction length, treats it as unsigned, and
-writes outside its native allocation. Left-to-right mode
-(`PrintDirection=1`) completes the same raster with both supported header
-interpretations, so PrintFlow forces that direction for legacy X-33 direct
-jobs only. The X-36NC/MultiInk path is not affected by this workaround.
+writes outside its native allocation. Single-direction output completes the
+same raster with both supported header interpretations, so PrintFlow forces
+left-to-right mode (`PrintDirection=1`) for legacy X-33 direct jobs only. The
+X-36 Studio/MultiInk path is not affected by this workaround.
+
+The vendor defines `EclosionGrade` as a unitless `0..3` feathering grade.
+PrintFlow reserves `0` (Off) and presents the usable job choices as Low (`1`),
+Medium (`2`), and High (`3`), defaulting new and legacy jobs to Medium.
+
+X-33 linearization uses the same `TransferCurveSet` XML parser as X-36 Studio.
+The resolved family-A/printer override is loaded for each job and its Cyan,
+Magenta, Yellow, and Black LUTs are applied to the separated tone planes before
+white generation and FM screening. A White curve is also applied when present;
+otherwise its identity LUT leaves the generated white plate unchanged. The log
+reports whether linearization was disabled, bypassed, loaded, and applied.
 
 For each X-33 job, PrintFlow calls `InitPrinter` and converts the job model's
 whole-millimeter `offset` to the controller's `uint32` hundredths of a

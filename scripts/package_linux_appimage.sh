@@ -84,6 +84,21 @@ stage_application_icon() {
         "${output_icon}"
 }
 
+application_icon_source() {
+    if [[ -n "${RIP_THEME_FILE}" ]]; then
+        printf '%s\n' "resources/assets/logo.png"
+        return
+    fi
+    case "${RIP_THEME}" in
+        nocai|xante)
+            printf '%s\n' "resources/themes/${RIP_THEME}/assets/logo.png"
+            ;;
+        *)
+            printf '%s\n' "resources/assets/logo.png"
+            ;;
+    esac
+}
+
 case "$(uname -m)" in
     x86_64|amd64)
         DEPLOY_ARCH="x86_64"
@@ -183,10 +198,10 @@ cmake --install "${BUILD_DIR}" --prefix "${APPDIR}/usr"
     cpack -G DEB -B "${REPO_ROOT}/${OUTPUT_DIR}"
 )
 cp resources/packaging/linux/printflow.desktop \
-    "${APPDIR}/usr/share/applications/${APP_NAME}.desktop"
+    "${APPDIR}/usr/share/applications/printflow.desktop"
 stage_application_icon \
-    resources/assets/logo.png \
-    "${APPDIR}/usr/share/icons/hicolor/256x256/apps/${APP_NAME}.png"
+    "$(application_icon_source)" \
+    "${APPDIR}/usr/share/icons/hicolor/256x256/apps/printflow.png"
 
 if [[ -d "resources/assets/blue_noise_mask_512_12000" ]]; then
     mkdir -p "${APPDIR}/usr/share/${APP_NAME}/assets/blue_noise_mask_512_12000"
@@ -229,8 +244,8 @@ export LINUXDEPLOY_OUTPUT_VERSION="${VERSION}"
     --appdir "${APPDIR}" \
     --executable "${APP_EXECUTABLE}" \
     --executable "${SERVICE_EXECUTABLE}" \
-    --desktop-file "${APPDIR}/usr/share/applications/${APP_NAME}.desktop" \
-    --icon-file "${APPDIR}/usr/share/icons/hicolor/256x256/apps/${APP_NAME}.png" \
+    --desktop-file "${APPDIR}/usr/share/applications/printflow.desktop" \
+    --icon-file "${APPDIR}/usr/share/icons/hicolor/256x256/apps/printflow.png" \
     --plugin qt \
     --output appimage
 

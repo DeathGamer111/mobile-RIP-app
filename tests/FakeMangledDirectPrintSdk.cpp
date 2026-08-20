@@ -61,6 +61,7 @@ static unsigned int expectedLineCount = 0;
 static unsigned int receivedLineCount = 0;
 static uint16_t configuredHeadSelect = 0;
 static uint16_t configuredPrintDirection = 0;
+static uint16_t configuredEclosionGrade = 0;
 static uint16_t configuredWcSequence = 0;
 static uint16_t configuredWhiteInkPercent = 0;
 static uint16_t configuredWhiteInkPassCount = 0;
@@ -110,8 +111,10 @@ int API_StartPrint(tagPrintJobProperty* property)
             && property->Colors > 0
             && property->Bits == 1
             && property->Pass == 1
+            && property->VsdMode == 0
             && (property->Colors == 1
                 || (property->Colors == 4 && configuredPrintDirection == 1
+                    && configuredEclosionGrade == 2
                     && configuredHeadSelect == 0
                     && configuredPrintHeight == 550
                     && printerInitialized
@@ -119,6 +122,7 @@ int API_StartPrint(tagPrintJobProperty* property)
                     && configuredPrintX == 1200
                     && configuredPrintY == 3400)
                 || (property->Colors == 6 && configuredPrintDirection == 1
+                    && configuredEclosionGrade == 2
                     && configuredHeadSelect == 0
                     && configuredWcSequence == 1
                     && configuredWhiteInkPercent == 3
@@ -167,6 +171,7 @@ int API_SetJobSettings(stJobSettings* settings, int size)
     if (!settings || size != static_cast<int>(sizeof(stJobSettings)))
         return 0;
     configuredPrintDirection = settings->PrintDirection;
+    configuredEclosionGrade = settings->EclosionGrade;
     configuredHeadSelect = settings->HeadSelect;
     configuredWcSequence = settings->WCSequence;
     configuredWhiteInkPercent = settings->WInkPercent;

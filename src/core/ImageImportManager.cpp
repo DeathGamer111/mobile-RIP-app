@@ -1,9 +1,11 @@
 #include "ImageImportManager.h"
 
 #include <QDateTime>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMetaObject>
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QUrl>
@@ -138,28 +140,35 @@ void ImageImportManager::handleActivityResult(int receiverRequestCode, int resul
         return;
 
     if (resultCode != AndroidResultOk) {
-        emit canceled();
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [this]() { emit canceled(); },
+                                  Qt::QueuedConnection);
         return;
     }
 
     if (!data.isValid()) {
-        emit failed(QStringLiteral("No image was returned."));
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [this]() {
+            emit failed(QStringLiteral("No image was returned."));
+        }, Qt::QueuedConnection);
         return;
     }
 
     const QJniObject uri = data.callObjectMethod("getData", "()Landroid/net/Uri;");
     if (receiverRequestCode == RequestPickImage || uri.isValid()) {
         const QString path = copyUriToLocalFile(uri, QStringLiteral("jpg"));
-        if (path.isEmpty())
-            emit failed(QStringLiteral("Could not import the selected image."));
-        else
-            emit imageReady(QUrl::fromLocalFile(path).toString());
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [this, path]() {
+            if (path.isEmpty())
+                emit failed(QStringLiteral("Could not import the selected image."));
+            else
+                emit imageReady(QUrl::fromLocalFile(path).toString());
+        }, Qt::QueuedConnection);
         return;
     }
 
     const QJniObject extras = data.callObjectMethod("getExtras", "()Landroid/os/Bundle;");
     if (!extras.isValid()) {
-        emit failed(QStringLiteral("Camera did not return an image."));
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [this]() {
+            emit failed(QStringLiteral("Camera did not return an image."));
+        }, Qt::QueuedConnection);
         return;
     }
 
@@ -167,10 +176,12 @@ void ImageImportManager::handleActivityResult(int receiverRequestCode, int resul
                                                      "(Ljava/lang/String;)Ljava/lang/Object;",
                                                      QJniObject::fromString(QStringLiteral("data")).object<jstring>());
     const QString path = saveCameraBitmap(bitmap);
-    if (path.isEmpty())
-        emit failed(QStringLiteral("Camera image could not be saved."));
-    else
-        emit imageReady(QUrl::fromLocalFile(path).toString());
+    QMetaObject::invokeMethod(QCoreApplication::instance(), [this, path]() {
+        if (path.isEmpty())
+            emit failed(QStringLiteral("Camera image could not be saved."));
+        else
+            emit imageReady(QUrl::fromLocalFile(path).toString());
+    }, Qt::QueuedConnection);
 }
 
 QString ImageImportManager::copyUriToLocalFile(const QJniObject &uri, const QString &fallbackExtension)
@@ -194,6 +205,9 @@ QString ImageImportManager::copyUriToLocalFile(const QJniObject &uri, const QStr
         extension = QStringLiteral("webp");
     else if (mimeString == QStringLiteral("image/bmp"))
         extension = QStringLiteral("bmp");
+    else if (mimeString == QStringLiteral("image/tiff")
+             || mimeString == QStringLiteral("image/x-tiff"))
+        extension = QStringLiteral("tif");
 
     const QString outputPath = newImportPath(extension, displayNameForUri(uri));
     if (outputPath.isEmpty())

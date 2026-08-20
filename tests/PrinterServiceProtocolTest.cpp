@@ -14,6 +14,8 @@ private slots:
     void settingsRoundTrip();
     void rasterRoundTrip();
     void malformedRasterIsRejected();
+    void spoolMetadataRoundTrip();
+    void malformedSpoolMetadataIsRejected();
     void bridgeAddressIsLoopbackOnly();
 };
 
@@ -169,6 +171,74 @@ void PrinterServiceProtocolTest::malformedRasterIsRejected()
     QVERIFY(!PrintFlowPrinterServiceProtocol::deserializeRaster(
         metadata, QByteArray(7, '\0'), &storage, &raster, &error));
     QVERIFY(error.contains(QStringLiteral("length")));
+}
+
+void PrinterServiceProtocolTest::spoolMetadataRoundTrip()
+{
+    DirectPrintSpool original;
+    original.channelOrder = {2, 1, 0, 3, 4, 4};
+    original.logicalChannelCount = 5;
+    original.width = 11854;
+    original.height = 12274;
+    original.xdpi = 720;
+    original.ydpi = 1440;
+    original.bytesPerLine = 2964;
+    original.format = DirectPrintRasterFormat::NocaiX33Standard;
+    original.bodyOffset = 4096;
+    original.bodyBytes = quint64(original.logicalChannelCount) *
+        quint64(original.height) * quint64(original.bytesPerLine);
+    original.sha256 = QByteArray(32, char(0xa5));
+    for (size_t index = 0; index < original.canonicalHeader.size(); ++index)
+        original.canonicalHeader[index] = uint32_t(index * 101);
+
+    DirectPrintSpool decoded;
+    QString error;
+    QVERIFY(PrintFlowPrinterServiceProtocol::spoolMetadataFromMap(
+        PrintFlowPrinterServiceProtocol::spoolMetadata(original),
+        &decoded, &error));
+    QCOMPARE(decoded.channelOrder, original.channelOrder);
+    QCOMPARE(decoded.logicalChannelCount, original.logicalChannelCount);
+    QCOMPARE(decoded.width, original.width);
+    QCOMPARE(decoded.height, original.height);
+    QCOMPARE(decoded.xdpi, original.xdpi);
+    QCOMPARE(decoded.ydpi, original.ydpi);
+    QCOMPARE(decoded.bytesPerLine, original.bytesPerLine);
+    QCOMPARE(decoded.format, original.format);
+    QCOMPARE(decoded.canonicalHeader, original.canonicalHeader);
+    QCOMPARE(decoded.bodyOffset, original.bodyOffset);
+    QCOMPARE(decoded.bodyBytes, original.bodyBytes);
+    QCOMPARE(decoded.sha256, original.sha256);
+    QVERIFY(error.isEmpty());
+}
+
+void PrinterServiceProtocolTest::malformedSpoolMetadataIsRejected()
+{
+    DirectPrintSpool source;
+    source.channelOrder = {0};
+    source.logicalChannelCount = 1;
+    source.width = 16;
+    source.height = 2;
+    source.xdpi = 720;
+    source.ydpi = 1440;
+    source.bytesPerLine = 4;
+    source.bodyOffset = 4096;
+    source.bodyBytes = 8;
+    source.sha256 = QByteArray(32, char(0x11));
+
+    DirectPrintSpool decoded;
+    QString error;
+    QVariantMap badChecksum = PrintFlowPrinterServiceProtocol::spoolMetadata(source);
+    badChecksum.insert(QStringLiteral("sha256"), QByteArray(31, char(0x11)));
+    QVERIFY(!PrintFlowPrinterServiceProtocol::spoolMetadataFromMap(
+        badChecksum, &decoded, &error));
+    QVERIFY(error.contains(QStringLiteral("incomplete")));
+
+    error.clear();
+    QVariantMap badChannel = PrintFlowPrinterServiceProtocol::spoolMetadata(source);
+    badChannel.insert(QStringLiteral("channels"), QVariantList{3});
+    QVERIFY(!PrintFlowPrinterServiceProtocol::spoolMetadataFromMap(
+        badChannel, &decoded, &error));
+    QVERIFY(error.contains(QStringLiteral("channel order")));
 }
 
 void PrinterServiceProtocolTest::bridgeAddressIsLoopbackOnly()

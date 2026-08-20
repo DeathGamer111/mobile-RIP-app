@@ -4,12 +4,12 @@
 #include <QString>
 #include <QStringList>
 #include <QtConcurrent>
-#include <QTemporaryDir>
 #include <QVariantMap>
 #include <QVariantList>
 #include <QList>
 #include <QPair>
 #include <array>
+#include <atomic>
 #include <vector>
 #include <cstdint>
 #include <memory>
@@ -17,11 +17,13 @@
 #include "AssetManager.h"
 #include "ColorManagementManager.h"
 #include "IPrintOutputClient.h"
+#include "MultiInkLinearization.h"
 #include "RasterAlphaMask.h"
 #include "X33WhiteToneBuilder.h"
 
 // CMYK raster pipeline: input load -> optional ICC convert -> CMYK separation ->
-// blue-noise thresholding -> dot classification, then vendor PRN output.
+// optional X-33 linearization -> blue-noise thresholding -> dot classification,
+// then vendor PRN output.
 
 class ColorManagementManager;
 
@@ -49,10 +51,12 @@ class PrintJobCMYK : public QObject {
 signals:
     void prnGenerationFinished(bool success);	// Emitted when runPRNGeneration completes.
     void outputPhaseChanged(const QString& phase);
+    void outputProgressChanged(qint64 completed, qint64 total);
 
 public slots:
     Q_INVOKABLE void runPRNGeneration(const QVariantMap& jobMap, const QString& outputPath);		// End-to-end async entry.
     Q_INVOKABLE void runDirectPrint(const QVariantMap& jobMap);
+    Q_INVOKABLE void cancelOutput();
 
 public:
     explicit PrintJobCMYK(QObject* parent = nullptr);
@@ -85,35 +89,16 @@ public:
 
 
 private:
-    struct RasterPayload {
-        std::vector<std::vector<std::vector<uint8_t>>> packedLines;
-        std::vector<int> channelOrder;
-        int width = 0;
-        int height = 0;
-        int xdpi = 0;
-        int ydpi = 0;
-        int bytesPerLine = 0;
-    };
-
 	ColorManagementManager* m_colorManager = nullptr;
     IPrintOutputClient* m_directPrintClient = nullptr;
 
     // Working images and intermediate data.
     Magick::Image inputImage;                        	// RGB input (temporary copy)
     RasterAlphaMask sourceAlphaMask;                 // Preserved before ICC conversion.
-    std::array<Magick::Image, 4> cmykChannels;       	// C, M, Y, K separated
-    std::array<Magick::Image, 4> thresholdMasks;     	// Blue noise masks per channel
-    std::array<std::vector<uint8_t>, 4> dotMaps;     	// Per-pixel dot class (0..3)
-    std::array<std::vector<uint8_t>, 4> packedOutput;	// 2bpp packed lines per channel
-    std::array<Magick::Image, 4> separateCMYK(Magick::Image& cmyk);
-
     // Paths and temp handling
     AssetManager m_assetManager;
     QString assetsExtractPath;
-    QString originalFilename;
-    QString tempImagePath;
 	bool assetsPrepared = false;
-    std::unique_ptr<QTemporaryDir> tempDir;
 
     // Per-job white configuration for the legacy X-33 path. One logical
     // screened W plane is generated here and emitted twice as YMCKWW.
@@ -126,6 +111,11 @@ private:
     int x33WhiteSmallDotThreshold = 104;
     int x33WhiteMedDotThreshold = 168;
     bool x33WhiteEnablePromotion = false;
+
+    // X-33 uses the same TransferCurve XML parser and dark CMYK LUTs as the
+    // X-36 Studio four-color path, applied before FM screening.
+    MultiInkLinearization x33Linearization;
+    QString x33LinearizationPath;
     
     // ICC profile state.
     Magick::Blob loadICCProfile(const QString& filePath);
@@ -135,21 +125,28 @@ private:
     QList<QPair<QString, QString>> availableICCProfiles; // name, path
 
   	// Screening/packing parameters.
-   	DotStrategy dotStrategy;
-   	uint32_t screenSeed = 0;  // seed the mask phase per run
+	DotStrategy dotStrategy;
+	uint32_t screenSeed = 0;  // seed the mask phase per run
+    double inputXDpi = 720.0;
+    double inputYDpi = 720.0;
+#if defined(PRINTFLOW_LEGACY_RASTER_REFERENCE)
     std::vector<std::vector<uint8_t>> dotClassification(const std::vector<uint8_t>& dithered, const std::vector<uint8_t>& mask, const std::vector<uint8_t>& channel, int width, int height, const DotStrategy& strategy);
-    bool prepareJobForOutput(const QVariantMap& jobMap, int& xdpi, int& ydpi);
-    bool buildRasterPayload(int xdpi, int ydpi, RasterPayload& payload);
-    bool loadExternalPlateTone(const QString& platePath,
-                               std::vector<uint8_t>& outTone,
-                               int width,
-                               int height) const;
-    bool writePRNFile(const RasterPayload& payload, const QString& outputPath);
-    bool sendDirectPrint(const RasterPayload& payload, const QVariantMap& jobMap);
+#endif
+    bool prepareJobForOutput(const QVariantMap& jobMap, int& xdpi, int& ydpi,
+                             bool includeFinalPrn);
+    void seedX33DefaultAssets();
+    bool reloadLinearizationFromManager();
+    bool loadInputImageForOutput(const QString& imagePath, int xdpi, int ydpi);
+    bool buildRasterSpool(int xdpi, int ydpi, DirectPrintSpool& spool,
+                          bool includeFinalPrn = false);
+    bool writePRNFile(const DirectPrintSpool& spool, const QString& outputPath);
+    bool sendDirectPrint(const DirectPrintSpool& spool, const QVariantMap& jobMap);
     DirectPrintSettings directPrintSettingsFromJob(const QVariantMap& jobMap,
-                                                   const RasterPayload& payload) const;
-    
-    // void apply4x4Promotion(std::vector<std::vector<uint8_t>>& dotMap, int width, int height);
+                                                   const DirectPrintSpool& spool) const;
+    std::atomic_bool m_cancelRequested{false};
+
+#if defined(PRINTFLOW_LEGACY_RASTER_REFERENCE)
     void apply4x4Promotion(std::vector<std::vector<uint8_t>>& dotMap, const std::vector<uint8_t>& tone, int width, int height);
+#endif
 
 };

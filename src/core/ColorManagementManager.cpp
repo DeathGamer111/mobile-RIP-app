@@ -50,6 +50,17 @@ static bool isSupportedFamilyKey(const QString& familyKey) {
 }
 
 
+static QString normalizedPrinterName(const QString& printerName) {
+    const QString name = printerName.trimmed();
+    if (name.compare(QStringLiteral("X-36 Studio"), Qt::CaseInsensitive) == 0 ||
+        name.compare(QStringLiteral("X-36NC (Photo Printer)"), Qt::CaseInsensitive) == 0 ||
+        name.compare(QStringLiteral("X-36NC"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("X-36 Studio");
+    }
+    return name;
+}
+
+
 static QVariantMap jsonObjectToVariantMap(const QJsonObject& o) {
     QVariantMap m;
     for (auto it = o.begin(); it != o.end(); ++it) {
@@ -72,10 +83,11 @@ static QJsonObject variantMapToJsonObject(const QVariantMap& m) {
 static QVariantMap defaultDirectPrintSettings() {
     QVariantMap m;
     m["selectedPrinterIndex"] = -1;
+    m["selectedPrinterName"] = QString();
     m["printDirection"] = 0;
     m["printSpeed"] = 1;
     m["wcSequence"] = 0;
-    m["eclosionGrade"] = 0;
+    m["eclosionGrade"] = 2;
     m["headSelect"] = 0;
     m["whiteInkPercent"] = 0;
     m["whiteInkPassCount"] = 0;
@@ -108,10 +120,16 @@ static QVariantMap normalizedDirectPrintSettings(const QVariantMap& in) {
     };
 
     clamp("selectedPrinterIndex", -1, 99);
+    out["selectedPrinterName"] = out.value("selectedPrinterName").toString().trimmed();
     clamp("printDirection", 0, 3);
     clamp("printSpeed", 0, 3);
     clamp("wcSequence", 0, 1);
-    clamp("eclosionGrade", 0, 3);
+    const int savedEclosionGrade = out.value("eclosionGrade", 2).toInt();
+    // Grade zero was the old default and disables feathering. The UI now
+    // exposes the three usable levels, so migrate old zero values to Medium.
+    out["eclosionGrade"] = savedEclosionGrade <= 0
+        ? 2
+        : std::clamp(savedEclosionGrade, 1, 3);
     clamp("headSelect", 0, 2);
     clamp("whiteInkPercent", 0, 9);
     clamp("whiteInkPassCount", 0, 255);
@@ -237,8 +255,9 @@ QString ColorManagementManager::selectedPrinter() const { return m_selectedPrint
 
 
 void ColorManagementManager::setSelectedPrinter(const QString& p) {
-    if (m_selectedPrinter == p) return;
-    m_selectedPrinter = p;
+    const QString normalized = normalizedPrinterName(p);
+    if (m_selectedPrinter == normalized) return;
+    m_selectedPrinter = normalized;
     emit selectedPrinterChanged();
     emit profilesChanged();
 }
@@ -278,14 +297,14 @@ QString ColorManagementManager::effectiveOutputProfile() const {
 
 
 QString ColorManagementManager::printerOutputProfile(const QString& printerName) const {
-    return m_printerOutputProfiles.value(printerName).toString();
+    return m_printerOutputProfiles.value(normalizedPrinterName(printerName)).toString();
 }
 
 
 void ColorManagementManager::setPrinterOutputProfile(const QString& printerName, const QString& profilePath) {
     if (printerName.trimmed().isEmpty()) return;
 
-    const QString key = printerName.trimmed();
+    const QString key = normalizedPrinterName(printerName);
     const QString newVal = profilePath.trimmed();
     const QString cur = m_printerOutputProfiles.value(key).toString();
 
@@ -343,10 +362,10 @@ void ColorManagementManager::setMultiInkDirectPrintSdkRootPath(const QString& pa
 
 
 QString ColorManagementManager::directPrintSdkFamilyForPrinter(const QString& printerName) const {
-    const QString name = printerName.trimmed();
+    const QString name = normalizedPrinterName(printerName);
     if (name.compare(QStringLiteral("X-33"), Qt::CaseInsensitive) == 0)
         return QStringLiteral("legacy-cmyk");
-    if (name.compare(QStringLiteral("X-36NC (Photo Printer)"), Qt::CaseInsensitive) == 0)
+    if (name.compare(QStringLiteral("X-36 Studio"), Qt::CaseInsensitive) == 0)
         return QStringLiteral("multi-ink");
     return QString();
 }
@@ -420,7 +439,7 @@ void ColorManagementManager::setFamilyDefaultOutputProfile(const QString& family
 
 
 QString ColorManagementManager::printerFamilyOutputProfile(const QString& printerName, const QString& familyKey) const {
-    const QString printerKey = printerName.trimmed();
+    const QString printerKey = normalizedPrinterName(printerName);
     const QString key = familyKey.trimmed().toUpper();
 
     if (printerKey.isEmpty() || !isSupportedFamilyKey(key))
@@ -432,7 +451,7 @@ QString ColorManagementManager::printerFamilyOutputProfile(const QString& printe
 
 
 void ColorManagementManager::setPrinterFamilyOutputProfile(const QString& printerName, const QString& familyKey, const QString& profilePath) {
-    const QString printerKey = printerName.trimmed();
+    const QString printerKey = normalizedPrinterName(printerName);
     const QString key = familyKey.trimmed().toUpper();
 
     if (printerKey.isEmpty() || !isSupportedFamilyKey(key))
@@ -454,7 +473,7 @@ void ColorManagementManager::setPrinterFamilyOutputProfile(const QString& printe
 
 
 QString ColorManagementManager::effectiveOutputProfileForPrinterAndInkMode(const QString& printerName, int inkMode) const {
-    const QString printerKey = printerName.trimmed();
+    const QString printerKey = normalizedPrinterName(printerName);
     const QString familyKey = familyKeyForInkMode(inkMode);
 
     // 1. Printer settings override
@@ -638,7 +657,7 @@ void ColorManagementManager::setFamilyDefaultLinearizationPath(const QString& fa
 
 
 QString ColorManagementManager::printerFamilyLinearizationPath(const QString& printerName, const QString& familyKey) const {
-    const QString printerKey = printerName.trimmed();
+    const QString printerKey = normalizedPrinterName(printerName);
     const QString key = familyKey.trimmed().toUpper();
 
     if (printerKey.isEmpty() || !isSupportedFamilyKey(key))
@@ -650,7 +669,7 @@ QString ColorManagementManager::printerFamilyLinearizationPath(const QString& pr
 
 
 void ColorManagementManager::setPrinterFamilyLinearizationPath(const QString& printerName, const QString& familyKey, const QString& xmlPath) {
-    const QString printerKey = printerName.trimmed();
+    const QString printerKey = normalizedPrinterName(printerName);
     const QString key = familyKey.trimmed().toUpper();
 
     if (printerKey.isEmpty() || !isSupportedFamilyKey(key))
@@ -672,7 +691,7 @@ void ColorManagementManager::setPrinterFamilyLinearizationPath(const QString& pr
 
 
 QString ColorManagementManager::effectiveLinearizationPathForPrinterAndInkMode(const QString& printerName, int inkMode) const {
-    const QString printerKey = printerName.trimmed();
+    const QString printerKey = normalizedPrinterName(printerName);
     const QString familyKey = familyKeyForInkMode(inkMode);
 
     // 1. Printer family override
@@ -891,7 +910,8 @@ bool ColorManagementManager::load() {
 
     const auto o = doc.object();
 
-    m_selectedPrinter = o.value("selectedPrinter").toString(m_selectedPrinter).trimmed();
+    m_selectedPrinter = normalizedPrinterName(
+        o.value("selectedPrinter").toString(m_selectedPrinter));
 
     // Profiles
     m_defaultInputProfile  = o.value("defaultInputProfile").toString(m_defaultInputProfile);
@@ -928,7 +948,7 @@ bool ColorManagementManager::load() {
     m_printerOutputProfiles.clear();
     const auto mapObj = o.value("printerOutputProfiles").toObject();
     for (auto it = mapObj.begin(); it != mapObj.end(); ++it)
-        m_printerOutputProfiles.insert(it.key(), it.value().toString());
+        m_printerOutputProfiles.insert(normalizedPrinterName(it.key()), it.value().toString());
 
     // Multi-ink params by mode
     m_multiInkParamsByMode.clear();
@@ -959,7 +979,8 @@ bool ColorManagementManager::load() {
     m_printerFamilyLinearizationPaths.clear();
     const auto printerFamilyLinObj = o.value("printerFamilyLinearizationPaths").toObject();
     for (auto it = printerFamilyLinObj.begin(); it != printerFamilyLinObj.end(); ++it) {
-        m_printerFamilyLinearizationPaths.insert(it.key(), jsonObjectToVariantMap(it.value().toObject()));
+        m_printerFamilyLinearizationPaths.insert(
+            normalizedPrinterName(it.key()), jsonObjectToVariantMap(it.value().toObject()));
     }
     
 	// Printer Profile family defaults
@@ -972,7 +993,8 @@ bool ColorManagementManager::load() {
     m_printerFamilyOutputProfiles.clear();
     const auto printerFamilyObj = o.value("printerFamilyOutputProfiles").toObject();
     for (auto it = printerFamilyObj.begin(); it != printerFamilyObj.end(); ++it) {
-        m_printerFamilyOutputProfiles.insert(it.key(), jsonObjectToVariantMap(it.value().toObject()));
+        m_printerFamilyOutputProfiles.insert(
+            normalizedPrinterName(it.key()), jsonObjectToVariantMap(it.value().toObject()));
     }
 
     emit profilesChanged();

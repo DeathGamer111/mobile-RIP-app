@@ -17,8 +17,10 @@ Page {
     required property StackView stackView
     required property Theme theme
     
-    // Optional override so the image can display even if the job hasn’t been saved yet
+	// Optional override so the image can display even if the job hasn’t been saved yet
 	property string initialImagePath: ""
+	property real fallbackInputDpi: 720
+	property var imageMeta: ({})
 
     background: Rectangle { color: theme.bg }
 
@@ -83,6 +85,7 @@ Page {
 
     onWidthChanged: updateZoomToFit()
     onHeightChanged: updateZoomToFit()
+    Component.onCompleted: imageMeta = imageLoader.extractMetadata(jobData().imagePath)
 
     function doBack() {
         stackView.pop()
@@ -109,7 +112,8 @@ Page {
                     rectY: Math.round(rectOverlayWrapper.itemY),
                     rectW: Math.round(rectOverlayWrapper.width),
                     rectH: Math.round(rectOverlayWrapper.height)
-                }
+                },
+                fallbackInputDpi
             )
 
             let imposedPath = jobData().imagePath.replace(/(\.\w+)$/, "_imposed$1")
@@ -254,7 +258,7 @@ Page {
                                 width: imageItem.width
                                 height: imageItem.height
 
-                                // Image is sized from pixels → mm using assumed 720 DPI (25.4 mm/in)
+                                // Image is sized from pixels and its input density to millimeters.
                                 Image {
                                     id: imageItem
 									source: impositionView.imagePath
@@ -262,12 +266,15 @@ Page {
                                     asynchronous: true
                                     visible: status === Image.Ready
 
-                                    readonly property real dpi: 720
-                                    readonly property real pxWidth: jobData().imageWidth || implicitWidth || 1000
-                                    readonly property real pxHeight: jobData().imageHeight || implicitHeight || 1000
+                                    readonly property real dpiX: imageMeta.hasEmbeddedDpi
+                                                                      ? imageMeta.xDpi : fallbackInputDpi
+                                    readonly property real dpiY: imageMeta.hasEmbeddedDpi
+                                                                      ? imageMeta.yDpi : fallbackInputDpi
+                                    readonly property real pxWidth: imageMeta.width || implicitWidth || 1000
+                                    readonly property real pxHeight: imageMeta.height || implicitHeight || 1000
 
-                                    width: (pxWidth / dpi) * 25.4
-                                    height: (pxHeight / dpi) * 25.4
+                                    width: (pxWidth / dpiX) * 25.4
+                                    height: (pxHeight / dpiY) * 25.4
 
                                     onStatusChanged: {
                                         if (status === Image.Ready) {

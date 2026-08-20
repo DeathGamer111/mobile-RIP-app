@@ -33,6 +33,9 @@ bool settingsFromMap(const QVariantMap& map, DirectPrintSettings* settings,
                      QString* errorMessage = nullptr);
 
 QVariantMap rasterMetadata(const DirectPrintRaster& raster);
+QVariantMap spoolMetadata(const DirectPrintSpool& spool);
+bool spoolMetadataFromMap(const QVariantMap& map, DirectPrintSpool* spool,
+                          QString* errorMessage = nullptr);
 bool serializeRaster(const DirectPrintRaster& raster, QByteArray* payload,
                      QString* errorMessage = nullptr);
 bool deserializeRaster(

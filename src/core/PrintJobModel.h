@@ -21,6 +21,7 @@ public:
         MediaHeightMmRole,
         ResolutionRole,
         OffsetRole,
+        FeatheringRole,
         WhiteStrategyRole,
         VarnishTypeRole,
         ColorProfileRole,

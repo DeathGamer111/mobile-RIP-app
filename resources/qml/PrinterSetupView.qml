@@ -41,7 +41,7 @@ Page {
             colorModes: ["CMYK", "CMYKWW", "CMYKWV"]
         },
 
-        "X-36NC (Photo Printer)": {
+        "X-36 Studio": {
             resolutions: ["720x720", "720x1440", "720x2160"],
             mediaSizes: ["A2", "A3", "A4", "A5", "A6", "Letter", "Legal", "Tabloid", "12x18", "18x24", "24x36", "24x48", "32x48"],
             duplexModes: ["None"],
@@ -73,17 +73,24 @@ Page {
     function isX36MultiInk() {
         return appState.usingSimulatedPrinter
                && appState.usingMultiInkPrinter
-               && appState.selectedPrinter === "X-36NC (Photo Printer)"
+               && colorManager.directPrintSdkFamilyForPrinter(appState.selectedPrinter) === "multi-ink"
     }
 
     function isSdkCapablePrinter() {
         return appState.usingSimulatedPrinter
-               && (appState.selectedPrinter === "X-33"
-                   || appState.selectedPrinter === "X-36NC (Photo Printer)")
+               && colorManager.directPrintSdkFamilyForPrinter(appState.selectedPrinter).length > 0
     }
 
     function setDirectSetting(key, value) {
         colorManager.setDirectPrintSetting(key, value)
+    }
+
+    function rememberSdkPrinter(printer) {
+        appState.sdkSelectedPrinterIndex = printer.index
+        appState.sdkSelectedPrinterName = printer.name
+        sdkSelectedPrinterName = printer.name
+        setDirectSetting("selectedPrinterIndex", printer.index)
+        setDirectSetting("selectedPrinterName", printer.name)
     }
 
     function refreshSdkPrinters() {
@@ -96,9 +103,7 @@ Page {
 
         if (ok && sdkPrinterModel.count === 1) {
             const onlyPrinter = sdkPrinterModel.get(0)
-            appState.sdkSelectedPrinterIndex = onlyPrinter.index
-            sdkSelectedPrinterName = onlyPrinter.name
-            setDirectSetting("selectedPrinterIndex", onlyPrinter.index)
+            rememberSdkPrinter(onlyPrinter)
             nocaiDirectPrint.choosePrinter(onlyPrinter.index)
         }
 
@@ -125,26 +130,26 @@ Page {
         }
     }
 
-    function syncSdkPrintersAfterConnection() {
+    // The printer service outlives this page, while sdkPrinterModel does not.
+    // Rehydrate the page model whenever it is created or the service list changes.
+    function syncSdkPrintersFromService() {
         sdkPrinterModel.clear()
         const printers = nocaiDirectPrint.printers
         for (let i = 0; i < printers.length; ++i)
             sdkPrinterModel.append(printers[i])
 
-        if (sdkPrinterModel.count === 1) {
-            const onlyPrinter = sdkPrinterModel.get(0)
-            appState.sdkSelectedPrinterIndex = onlyPrinter.index
-            sdkSelectedPrinterName = onlyPrinter.name
-            setDirectSetting("selectedPrinterIndex", onlyPrinter.index)
-        }
         syncSdkPrinterCombo()
     }
 
     Connections {
         target: nocaiDirectPrint
+        function onPrintersChanged() {
+            root.syncSdkPrintersFromService()
+        }
+
         function onMaintenanceActionFinished(action, succeeded, result, errorMessage) {
             if (action === "ConnectPrinter" && root.sdkConnectionState === "connecting") {
-                root.syncSdkPrintersAfterConnection()
+                root.syncSdkPrintersFromService()
                 root.sdkConnectionState = succeeded ? "connected" : "failed"
                 toast.show(succeeded
                            ? strings.trKey("printerSetup.toast.sdkConnected")
@@ -178,12 +183,30 @@ Page {
     function syncSdkPrinterCombo() {
         sdkPrinterCombo.currentIndex = -1
         sdkSelectedPrinterName = ""
+        let savedNameMatch = -1
         for (let i = 0; i < sdkPrinterModel.count; ++i) {
-            if (sdkPrinterModel.get(i).index === appState.sdkSelectedPrinterIndex) {
+            const printer = sdkPrinterModel.get(i)
+            if (printer.index === appState.sdkSelectedPrinterIndex) {
                 sdkPrinterCombo.currentIndex = i
-                sdkSelectedPrinterName = sdkPrinterModel.get(i).name
+                sdkSelectedPrinterName = printer.name
                 break
             }
+            if ((appState.sdkSelectedPrinterName || "").length > 0
+                    && printer.name === appState.sdkSelectedPrinterName)
+                savedNameMatch = i
+        }
+
+        // Discovery indexes can change between SDK sessions. The saved name is
+        // the stable fallback and updates the index used by direct printing.
+        if (sdkPrinterCombo.currentIndex < 0 && savedNameMatch >= 0) {
+            sdkPrinterCombo.currentIndex = savedNameMatch
+            rememberSdkPrinter(sdkPrinterModel.get(savedNameMatch))
+        } else if (sdkPrinterCombo.currentIndex < 0 && sdkPrinterModel.count === 1) {
+            sdkPrinterCombo.currentIndex = 0
+            rememberSdkPrinter(sdkPrinterModel.get(0))
+        } else if (sdkPrinterCombo.currentIndex >= 0
+                   && appState.sdkSelectedPrinterName !== sdkSelectedPrinterName) {
+            rememberSdkPrinter(sdkPrinterModel.get(sdkPrinterCombo.currentIndex))
         }
     }
 
@@ -235,12 +258,12 @@ Page {
 		    const selected = appState.selectedPrinter || ""
 
 		    // Pre-select Nocai model if one is already chosen
-		    const nocaiNames = ["X-33", "X-36NC (Photo Printer)"]
+		    const nocaiNames = ["X-33", "X-36 Studio"]
 		    const nocaiIndex = nocaiNames.indexOf(selected)
 		    if (nocaiIndex >= 0)
 		        nocaiPrinterComboBox.currentIndex = nocaiIndex
 
-		    const isMultiInk = (selected === "X-36NC (Photo Printer)")
+		    const isMultiInk = colorManager.directPrintSdkFamilyForPrinter(selected) === "multi-ink"
 		    appState.usingMultiInkPrinter = isMultiInk
             appState.configureDirectPrintSdk()
 
@@ -399,6 +422,7 @@ Page {
 		_syncingTabs = false
 
 		Qt.callLater(syncUIFromAppState)
+		Qt.callLater(syncSdkPrintersFromService)
 	}
 
     onVisibleChanged: {
@@ -408,6 +432,7 @@ Page {
 		    _syncingTabs = false
 
 		    Qt.callLater(syncUIFromAppState)
+		    Qt.callLater(syncSdkPrintersFromService)
 		}
     }
 
@@ -548,7 +573,7 @@ Page {
                                 Layout.fillWidth: true
                                 model: [
                                     "X-33",
-                                    "X-36NC (Photo Printer)"
+                                    "X-36 Studio"
                                 ]
 
                                 onActivated: {
@@ -559,7 +584,7 @@ Page {
                                     colorManager.selectedPrinter = selected
                                     appState.usingSimulatedPrinter = true
 
-                                    const isMultiInk = (selected === "X-36NC (Photo Printer)")
+                                    const isMultiInk = colorManager.directPrintSdkFamilyForPrinter(selected) === "multi-ink"
                                     appState.usingMultiInkPrinter = isMultiInk
                                     appState.configureDirectPrintSdk()
 
@@ -602,10 +627,10 @@ Page {
                                 }
                             }
 
-                            // Ink layout selection – only for X-36NC MultiInk printer
+                            // Ink layout selection – only for X-36 Studio.
                             ColumnLayout {
                                 visible: appState.usingSimulatedPrinter
-                                         && appState.selectedPrinter === "X-36NC (Photo Printer)"
+                                         && colorManager.directPrintSdkFamilyForPrinter(appState.selectedPrinter) === "multi-ink"
                                 Layout.fillWidth: true
                                 spacing: 8
 
@@ -792,14 +817,14 @@ Page {
                                     Layout.fillWidth: true
                                     model: sdkPrinterModel
                                     textRole: "name"
-                                    displayText: currentIndex >= 0 ? currentText : "(no SDK printer selected)"
+                                    displayText: currentIndex >= 0
+                                                 ? currentText
+                                                 : strings.trKey("printerSetup.noSdkPrinterSelected")
 
 	                                    onActivated: {
 	                                        if (sdkPrinterModel.count <= 0) return
 	                                        const selected = sdkPrinterModel.get(currentIndex)
-	                                        appState.sdkSelectedPrinterIndex = selected.index
-	                                        root.sdkSelectedPrinterName = selected.name
-	                                        root.setDirectSetting("selectedPrinterIndex", selected.index)
+	                                        root.rememberSdkPrinter(selected)
 	                                        nocaiDirectPrint.choosePrinter(selected.index)
 	                                    }
 	                                }

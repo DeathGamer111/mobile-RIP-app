@@ -27,8 +27,13 @@ The current codebase supports Linux desktop development and Android APKs with CM
 - Media-size selection for ISO A0-A6, Letter, Legal, Tabloid, common 12x18 through 32x48 sign sizes, 24x36 Coroplast, and custom dimensions.
 - Printer setup flow for desktop printers, prepared PRN output, and optional vendor direct-print workflows.
 - ICC profile handling through Little CMS, including bundled CMYK and multi-ink output profiles.
-- Device-aware Color Management: X-33 exposes CMYK and supported white controls while Multi Ink-only thresholds remain disabled; X-36NC exposes its selected multi-channel controls.
+- Device-aware Color Management: X-33 exposes CMYK and supported white controls while Multi Ink-only thresholds remain disabled; X-36 Studio exposes its selected multi-channel controls.
 - PRN generation with 2-bit dot classification, stochastic screening, and dot promotion controls.
+- Shared bounded-memory X-33 and X-36 Studio raster engine. It preserves the
+  existing imaging order, screens channel-major strips of at most 128 rows,
+  spills ImageMagick caches and canonical CMYK data to application scratch
+  storage, and finalizes a checksummed spool before the printer can start.
+- Density-aware artwork sizing that preserves embedded input DPI across previews, imposition, X-33 output, and X-36 Studio output; density-less files retain printer-family compatibility defaults.
 - Multi-ink PRN generation with 4, 5, 6, 7, 8, and 10 channel ink layouts.
 - Linearization support using bundled XML presets.
 - Runtime asset preparation for bundled ICC profiles, linearization files, logo assets, and local blue-noise masks.
@@ -95,9 +100,9 @@ Important QML views include:
 
 Small runtime assets are tracked in `resources/assets/`, including:
 
-- Output ICC profiles for 4-color, 8-color, 1440 plain default, 1440 plain neutral, and generic CMYK workflows.
+- Output ICC profiles for 4-color, 8-color, X-33 1440 plain default, 1440 plain neutral, and generic CMYK workflows. The bundled X-33 profile is atomically refreshed in runtime storage when its packaged contents change.
 - `sRGBProfile.icm`
-- Linearization XML presets for 4-color and 8-color output.
+- Linearization XML presets for X-36 Studio 4/8-color output and the X-33 1440-DPI pipeline. The X-33 profile and linearization are seeded as that printer's defaults while valid user overrides remain intact.
 - `logo.png`
 
 Large blue-noise mask directories are intentionally ignored by Git:
@@ -106,9 +111,36 @@ Large blue-noise mask directories are intentionally ignored by Git:
 resources/assets/blue_noise_mask_*/**
 ```
 
-For local builds that generate multi-ink output, the app expects `resources/assets/blue_noise_mask_512_12000/` to exist locally with the mask TIFF files used by `scripts/dev_build_linux.sh`. The masks can be embedded into Qt resources with `-DRIP_EMBED_BLUE_NOISE_MASKS=ON`, but the default leaves them as local runtime assets to avoid very large generated resource objects.
+For local builds that generate multi-ink output, the app expects `resources/assets/blue_noise_mask_512_12000/` to exist locally with the mask TIFF files used by `scripts/dev_build_linux.sh`. The masks can be embedded into Qt resources with `-DRIP_EMBED_BLUE_NOISE_MASKS=ON`. Desktop builds leave them as local runtime assets to avoid very large generated resource objects. Android builds embed them by default because a clean mobile installation has no separately provisioned runtime-assets directory; set `RIP_EMBED_BLUE_NOISE_MASKS=OFF` only for UI-only development APKs.
 
 Theme assets live under `resources/themes/<theme-id>/assets/` or `resources/vendor/<vendor-id>/assets/` and are compiled into Qt resources when referenced by theme JSON. Raw vendor drops, demo programs, and diagnostics stay ignored; the four reviewed Linux runtime libraries are centralized under `third_party/nocai/direct-print/`.
+
+## Bounded raster and spool output
+
+Production X-33 and X-36 Studio output uses a 512 MiB RIP working-memory budget:
+192 MiB for ImageMagick memory, 128 MiB for its mapped cache, 128 MiB for native
+strip and mask buffers, and 64 MiB of contingency. Before rasterization, the app
+reports and validates scratch-space requirements for ImageMagick caches,
+canonical CMYK/plate data, packed spool data, an optional PRN, and a 20 percent
+safety margin. Insufficient disk, allocation failures, cancellation, and cache
+limit failures return a normal job error and remove partial output.
+
+Raster rows are written immediately to a versioned, SHA-256-validated,
+channel-major spool. Direct SDK workers open that spool rather than receiving a
+reconstructed full image. Printer-service clients upload sequential 1 MiB
+chunks; the service verifies offsets, metadata, size, and checksum before it
+calls `StartPrint`. The prior one-frame protocol remains available for older
+small clients.
+
+The normal test suite exercises strip heights of 1, 17, and 128 rows and checks
+spool/PRN equivalence, corruption rejection, physical plane order, and streamed
+service failure cases. The real ONYX evaluation image is an opt-in resource test:
+
+```bash
+QTEST_FUNCTION_TIMEOUT=3600000 \
+  PRINTFLOW_ONYX_EVAL_IMAGE=/path/to/Quality-Evaluation-CMYK.tif \
+  build-tests/tests/PrintFlowCMYKAssetManagerTest onyxEvaluationImageStaysBounded
+```
 
 ## Direct-print SDK
 

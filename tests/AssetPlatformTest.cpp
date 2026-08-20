@@ -34,7 +34,16 @@ void AssetPlatformTest::assetManagerUsesWritableRuntimePath()
     QVERIFY(manager.hasAsset(QStringLiteral("copied.txt")));
     QVERIFY(manager.assetPath(QStringLiteral("copied.txt")).endsWith(QStringLiteral("/copied.txt")));
 
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write("updated asset");
+    file.close();
+    QVERIFY(manager.syncResource(source, QStringLiteral("copied.txt")));
+    QFile copied(manager.assetPath(QStringLiteral("copied.txt")));
+    QVERIFY(copied.open(QIODevice::ReadOnly));
+    QCOMPARE(copied.readAll(), QByteArray("updated asset"));
+
     QVERIFY(!manager.copyResourcesIfMissing({source}, {}));
+    QVERIFY(!manager.syncResources({source}, {}));
     QVERIFY(manager.cleanup());
     QVERIFY(!QFileInfo::exists(manager.rootPath()));
 }

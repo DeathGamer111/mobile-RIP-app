@@ -30,10 +30,13 @@ public:
 
 signals:
     void prnGenerationFinished(bool success);
+    void outputPhaseChanged(const QString& phase);
+    void outputProgressChanged(qint64 completed, qint64 total);
 
 public slots:
     Q_INVOKABLE void runPRNGeneration(const QVariantMap& jobMap, const QString& outputPath);
     Q_INVOKABLE void runDirectPrint(const QVariantMap& jobMap);
+    Q_INVOKABLE void cancelOutput();
 
 public:
     void setColorManager(ColorManagementManager* mgr);

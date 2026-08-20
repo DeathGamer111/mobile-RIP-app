@@ -15,7 +15,7 @@ RIP_THEME_FILE="${RIP_THEME_FILE:-}"
 DIRECT_PRINT_SDK_ROOT="${DIRECT_PRINT_SDK_ROOT:-${REPO_ROOT}/third_party/nocai/direct-print}"
 
 STEP=0
-TOTAL_STEPS=8
+TOTAL_STEPS=9
 
 step() {
     STEP=$((STEP + 1))
@@ -119,6 +119,42 @@ theme_cmake_args() {
     fi
 }
 
+application_icon_source() {
+    if [[ -n "${RIP_THEME_FILE}" ]]; then
+        printf '%s\n' "resources/assets/logo.png"
+        return
+    fi
+    case "${RIP_THEME}" in
+        nocai|xante)
+            printf '%s\n' "resources/themes/${RIP_THEME}/assets/logo.png"
+            ;;
+        *)
+            printf '%s\n' "resources/assets/logo.png"
+            ;;
+    esac
+}
+
+stage_application_icon() {
+    local source_icon="$1"
+    local output_icon="$2"
+    local -a image_tool
+
+    if command -v magick >/dev/null 2>&1; then
+        image_tool=(magick)
+    elif command -v convert >/dev/null 2>&1; then
+        image_tool=(convert)
+    else
+        fail "ImageMagick is required to create the desktop application icon."
+    fi
+
+    "${image_tool[@]}" "${source_icon}" \
+        -resize 256x256 \
+        -background none \
+        -gravity center \
+        -extent 256x256 \
+        "${output_icon}"
+}
+
 step "Checking Linux build dependencies"
 info "sudo may ask for your password."
 sudo apt-get update -qq
@@ -159,7 +195,7 @@ sudo apt-get install -y --no-remove \
     qml6-module-qtcore qml6-module-qtquick-window qml-module-qtquick-shapes \
     qml6-module-qtquick-shapes qt5-qmltooling-plugins qt6-image-formats-plugins \
     "${QT6_SVG_PLUGIN_PACKAGES[@]}" libqt6widgets6 libqt6svg6 libqt6svgwidgets6 \
-    qml6-module-qtqml-workerscript \
+    qml6-module-qtqml-workerscript imagemagick \
     qml6-module-qtquick-templates libqt6test6 \
     libcap2-bin network-manager iproute2
 
@@ -211,13 +247,33 @@ else
     info "Mask directory not found: ${MASK_SOURCE_DIR}"
 fi
 
+EXECUTABLE_PATH="$(realpath "${BUILD_DIR}/${TARGET_NAME}")"
+SERVICE_PATH="$(realpath "${BUILD_DIR}/PrintFlowPrinterService")"
+[[ -x "${EXECUTABLE_PATH}" ]] || fail "Built executable was not found: ${EXECUTABLE_PATH}"
+[[ -x "${SERVICE_PATH}" ]] || fail "Printer service was not found: ${SERVICE_PATH}"
+
+step "Installing desktop launcher and icon"
+DESKTOP_DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
+DESKTOP_APPLICATION_DIR="${DESKTOP_DATA_HOME}/applications"
+STAGED_ICON_PATH="${BUILD_DIR}/printflow-app-icon.png"
+ICON_SOURCE="$(application_icon_source)"
+[[ -f "${ICON_SOURCE}" ]] || fail "Application icon was not found: ${ICON_SOURCE}"
+mkdir -p "${DESKTOP_APPLICATION_DIR}"
+stage_application_icon "${ICON_SOURCE}" "${STAGED_ICON_PATH}"
+xdg-icon-resource install --noupdate --novendor --size 256 \
+    "${STAGED_ICON_PATH}" printflow
+desktop-file-install --dir="${DESKTOP_APPLICATION_DIR}" \
+    --set-key=Exec --set-value="${EXECUTABLE_PATH}" \
+    --set-icon=printflow \
+    resources/packaging/linux/printflow.desktop
+xdg-icon-resource forceupdate
+update-desktop-database "${DESKTOP_APPLICATION_DIR}"
+info "Desktop launcher: ${DESKTOP_APPLICATION_DIR}/printflow.desktop"
+info "Dock icon: ${DESKTOP_DATA_HOME}/icons/hicolor/256x256/apps/printflow.png"
+
 step "Configuring direct-printer access"
 configure_direct_printer_network
 
-EXECUTABLE_PATH="${BUILD_DIR}/${TARGET_NAME}"
-SERVICE_PATH="${BUILD_DIR}/PrintFlowPrinterService"
-[[ -x "${EXECUTABLE_PATH}" ]] || fail "Built executable was not found: ${EXECUTABLE_PATH}"
-[[ -x "${SERVICE_PATH}" ]] || fail "Printer service was not found: ${SERVICE_PATH}"
 sudo setcap cap_net_raw+ep "${SERVICE_PATH}"
 getcap "${SERVICE_PATH}" | grep -q 'cap_net_raw=ep' ||
     fail "CAP_NET_RAW was not applied to ${SERVICE_PATH}."

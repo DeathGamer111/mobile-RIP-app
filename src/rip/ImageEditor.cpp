@@ -1,8 +1,12 @@
 #include "ImageEditor.h"
+#include "BoundedRasterPipeline.h"
+#include "ImagePhysicalSize.h"
 #include "MagickCompatibility.h"
 #include <QDebug>
 #include <QUrl>
 #include <QFile>
+
+#include <cmath>
 
 using namespace Magick;
 
@@ -11,14 +15,16 @@ using namespace Magick;
     ImageEditor constructor, Initializes ImageMagick.
 *****************************************************/
 ImageEditor::ImageEditor(QObject *parent) : QObject(parent) {
-    InitializeMagick(nullptr);
+    BoundedRasterPipeline::configureImageMagickCache();
 }
 
 
 // Load an image from the provided file path
 bool ImageEditor::loadImage(const QString &path) {
-    try {
+	try {
         QString localPath = QUrl(path).toLocalFile();
+        m_image = Magick::Image();
+        ImagePhysicalSize::setVectorReadDensity(m_image, localPath, 720, 720);
         m_image.read(localPath.toStdString());
         m_imageLoaded = true;
         return true;
@@ -444,7 +450,7 @@ void ImageEditor::clearUndoRedoStacks() {
 
 
 // Apply Edits made in the ImpositionView
-bool ImageEditor::applyImpositionEdits(const QString &imagePath, int offsetX, int offsetY, QSize paperSize, const QVariantMap &overlayData) {
+bool ImageEditor::applyImpositionEdits(const QString &imagePath, int offsetX, int offsetY, QSize paperSize, const QVariantMap &overlayData, double fallbackInputDpi) {
     QString localPath = QUrl(imagePath).toLocalFile();
     if (!QFile::exists(localPath)) {
         qWarning() << "Original image not found:" << localPath;
@@ -466,16 +472,39 @@ bool ImageEditor::applyImpositionEdits(const QString &imagePath, int offsetX, in
         const int canvasW = static_cast<int>(paperSize.width() / 25.4 * dpi);
         const int canvasH = static_cast<int>(paperSize.height() / 25.4 * dpi);
 
+        const ImagePhysicalSize::Density inputDensity =
+            ImagePhysicalSize::resolvedDensity(
+                m_image, fallbackInputDpi, fallbackInputDpi);
+        const QSize imposedImageSize = ImagePhysicalSize::outputPixelSize(
+            m_image.columns(), m_image.rows(), inputDensity, dpi, dpi);
+        if (!imposedImageSize.isValid()) {
+            qWarning() << "Could not resolve imposed image dimensions.";
+            return false;
+        }
+        if (imposedImageSize.width() != static_cast<int>(m_image.columns()) ||
+            imposedImageSize.height() != static_cast<int>(m_image.rows())) {
+            m_image.resize(Geometry(
+                imposedImageSize.width(), imposedImageSize.height()));
+        }
+        m_image.resolutionUnits(PixelsPerInchResolution);
+        MagickCompatibility::setDensity(m_image, dpi, dpi);
+
+        const auto mmToPixels = [dpi](double mm) {
+            return static_cast<int>(std::lround(mm * dpi / 25.4));
+        };
+
         // Create blank canvas
         Image canvas(Geometry(canvasW, canvasH), Color("white"));
+        canvas.resolutionUnits(PixelsPerInchResolution);
+        MagickCompatibility::setDensity(canvas, dpi, dpi);
         MagickCompatibility::setAlphaChannel(m_image, true);
-        canvas.composite(m_image, offsetX, offsetY, OverCompositeOp);
+        canvas.composite(m_image, mmToPixels(offsetX), mmToPixels(offsetY), OverCompositeOp);
 
         // === Optional: Draw Text ===
         if (overlayData.contains("text") && !overlayData["text"].toString().isEmpty()) {
             const QString text = overlayData["text"].toString();
-            const int textX = overlayData["textX"].toInt();
-            const int textY = overlayData["textY"].toInt();
+            const int textX = mmToPixels(overlayData["textX"].toDouble());
+            const int textY = mmToPixels(overlayData["textY"].toDouble());
 
             DrawableList drawText;
             drawText.push_back(DrawableFont("Helvetica"));
@@ -487,10 +516,10 @@ bool ImageEditor::applyImpositionEdits(const QString &imagePath, int offsetX, in
 
         // === Optional: Draw Rectangle ===
         if (overlayData.contains("drawRect") && overlayData["drawRect"].toBool()) {
-            const int rx = overlayData["rectX"].toInt();
-            const int ry = overlayData["rectY"].toInt();
-            const int rw = overlayData["rectW"].toInt();
-            const int rh = overlayData["rectH"].toInt();
+            const int rx = mmToPixels(overlayData["rectX"].toDouble());
+            const int ry = mmToPixels(overlayData["rectY"].toDouble());
+            const int rw = mmToPixels(overlayData["rectW"].toDouble());
+            const int rh = mmToPixels(overlayData["rectH"].toDouble());
 
             DrawableList drawRect;
             drawRect.push_back(DrawableStrokeColor("red"));

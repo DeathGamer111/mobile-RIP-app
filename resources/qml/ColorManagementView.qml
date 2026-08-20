@@ -71,7 +71,7 @@ Page {
     }
 
     function isMultiInkPrinterName(name) {
-        return name === "X-36NC (Photo Printer)"
+        return colorManager.directPrintSdkFamilyForPrinter(name) === "multi-ink"
     }
 
     function hasPrinterSelected() {

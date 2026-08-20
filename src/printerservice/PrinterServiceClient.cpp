@@ -1,6 +1,7 @@
 #include "PrinterServiceClient.h"
 
 #include "PrinterServiceProtocol.h"
+#include "RasterSpool.h"
 
 #include <QCoreApplication>
 #include <QDeadlineTimer>
@@ -10,6 +11,7 @@
 #include <QFile>
 #include <QLocalSocket>
 #include <QProcess>
+#include <QScopeGuard>
 #include <QTcpSocket>
 #include <QThread>
 #include <QtConcurrent>
@@ -716,6 +718,167 @@ bool PrinterServiceClient::submitPreparedJob(
     };
     return responseOk(request(QStringLiteral("submitJob"), arguments,
                               payload, kJobTimeoutMs));
+}
+
+void PrinterServiceClient::setSpoolProgressCallback(ProgressCallback callback)
+{
+    QMutexLocker locker(&m_mutex);
+    m_spoolProgressCallback = std::move(callback);
+}
+
+void PrinterServiceClient::reportSpoolProgress(
+    const QString& phase, qint64 completed, qint64 total)
+{
+    ProgressCallback callback;
+    {
+        QMutexLocker locker(&m_mutex);
+        callback = m_spoolProgressCallback;
+    }
+    if (callback)
+        callback(phase, completed, total);
+}
+
+bool PrinterServiceClient::submitSpooledJob(
+    const DirectPrintSpool& spool, const DirectPrintSettings& settings)
+{
+    m_cancelUpload.store(false, std::memory_order_relaxed);
+    m_uploadActive.store(true, std::memory_order_relaxed);
+    const auto uploadGuard = qScopeGuard([this]() {
+        m_uploadActive.store(false, std::memory_order_relaxed);
+    });
+    auto failWithError = [this](const QString& message) {
+        QMutexLocker locker(&m_mutex);
+        m_lastError = message;
+        emit statusChanged();
+        return false;
+    };
+    QString error;
+    if (!PrintFlowRasterSpool::verify(
+            spool, &error,
+            [this]() {
+                return m_cancelUpload.load(std::memory_order_relaxed);
+            })) {
+        return failWithError(error);
+    }
+
+    // Protocol v1 is additive, so a stale service can answer ping while still
+    // lacking streamed spool commands. Discover the feature and replace a
+    // stale desktop service before starting a large upload.
+    QString startupError;
+    if (!ensureService(&startupError))
+        return failWithError(startupError);
+    QVariantMap hello = exchange(QStringLiteral("ping"), {}, {}, 3000, false);
+    applyResponse(hello);
+    auto supportsStreaming = [](const QVariantMap& response) {
+        return response.value(QStringLiteral("ok")).toBool()
+            && response.value(QStringLiteral("state")).toMap()
+                   .value(QStringLiteral("streamingRasterUpload"), false).toBool();
+    };
+    if (!supportsStreaming(hello)) {
+#if !defined(Q_OS_ANDROID)
+        const QVariantMap restarted = restartService(settings.printerIndex);
+        applyResponse(restarted);
+        if (!restarted.value(QStringLiteral("ok")).toBool())
+            return false;
+        hello = exchange(QStringLiteral("ping"), {}, {}, 3000, false);
+        applyResponse(hello);
+#endif
+        if (!supportsStreaming(hello)) {
+            return failWithError(QStringLiteral(
+                "The printer service does not support streaming raster uploads. Update or restart the printer service."));
+        }
+    }
+    QFile file(spool.path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return failWithError(file.errorString());
+    }
+    const quint64 expectedBytes = spool.bodyOffset + spool.bodyBytes;
+    if (quint64(file.size()) != expectedBytes) {
+        return failWithError(QStringLiteral(
+            "Raster spool file length does not match its metadata."));
+    }
+    reportSpoolProgress(QStringLiteral("uploading"), 0, qint64(expectedBytes));
+    const QVariantMap beginArguments{
+        {QStringLiteral("spool"),
+         PrintFlowPrinterServiceProtocol::spoolMetadata(spool)},
+        {QStringLiteral("settings"),
+         PrintFlowPrinterServiceProtocol::settingsToMap(settings)},
+        {QStringLiteral("fileBytes"), qulonglong(expectedBytes)},
+    };
+    QVariantMap begin = request(QStringLiteral("beginRasterUpload"),
+                                beginArguments, {}, kJobTimeoutMs);
+    if (!responseOk(begin))
+        return false;
+    const QVariantMap result = begin.value(QStringLiteral("result")).toMap();
+    const QString uploadId = result.value(QStringLiteral("uploadId")).toString();
+    const qsizetype chunkBytes = std::clamp(
+        result.value(QStringLiteral("chunkBytes"), 1024 * 1024).toLongLong(),
+        qint64(1), qint64(1024 * 1024));
+    if (uploadId.isEmpty()) {
+        QMutexLocker locker(&m_mutex);
+        m_lastError = QStringLiteral("Printer service did not create a raster upload.");
+        emit statusChanged();
+        return false;
+    }
+    quint64 offset = 0;
+    while (offset < expectedBytes) {
+        if (m_cancelUpload.load(std::memory_order_relaxed)) {
+            request(QStringLiteral("cancelRasterUpload"),
+                    {{QStringLiteral("uploadId"), uploadId}}, {}, 5000);
+            QMutexLocker locker(&m_mutex);
+            m_lastError = QStringLiteral("Raster upload canceled.");
+            emit statusChanged();
+            return false;
+        }
+        const QByteArray chunk = file.read(chunkBytes);
+        if (chunk.isEmpty()) {
+            request(QStringLiteral("cancelRasterUpload"),
+                    {{QStringLiteral("uploadId"), uploadId}}, {}, 5000);
+            QMutexLocker locker(&m_mutex);
+            m_lastError = QStringLiteral("Raster spool became truncated during upload.");
+            emit statusChanged();
+            return false;
+        }
+        const QVariantMap appendArguments{
+            {QStringLiteral("uploadId"), uploadId},
+            {QStringLiteral("offset"), qulonglong(offset)},
+        };
+        const QVariantMap appended = request(
+            QStringLiteral("appendRasterChunk"), appendArguments,
+            chunk, kJobTimeoutMs);
+        if (!responseOk(appended)) {
+            request(QStringLiteral("cancelRasterUpload"),
+                    {{QStringLiteral("uploadId"), uploadId}}, {}, 5000);
+            return false;
+        }
+        offset += quint64(chunk.size());
+        reportSpoolProgress(QStringLiteral("uploading"),
+                            qint64(offset), qint64(expectedBytes));
+    }
+    if (m_cancelUpload.load(std::memory_order_relaxed)) {
+        request(QStringLiteral("cancelRasterUpload"),
+                {{QStringLiteral("uploadId"), uploadId}}, {}, 5000);
+        return false;
+    }
+    m_uploadActive.store(false, std::memory_order_relaxed);
+    reportSpoolProgress(QStringLiteral("printing"), 0, 1);
+    const bool committed = responseOk(request(
+        QStringLiteral("commitRasterUpload"),
+        {{QStringLiteral("uploadId"), uploadId}}, {}, kJobTimeoutMs));
+    if (committed)
+        reportSpoolProgress(QStringLiteral("printing"), 1, 1);
+    return committed;
+}
+
+void PrinterServiceClient::cancelCurrentOutput()
+{
+    if (m_uploadActive.load(std::memory_order_relaxed)) {
+        m_cancelUpload.store(true, std::memory_order_relaxed);
+        return;
+    }
+    // Do not run the normal service-start probe here: while an isolated print
+    // worker is active the service intentionally prioritizes the abort command.
+    applyResponse(exchange(QStringLiteral("abortPrint"), {}, {}, 5000, false));
 }
 
 QVariantMap PrinterServiceClient::request(const QString& command,

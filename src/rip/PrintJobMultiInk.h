@@ -3,11 +3,11 @@
 #include <QObject>
 #include <QString>
 #include <QVariantMap>
-#include <QTemporaryDir>
 #include <QList>
 #include <QPair>
 
 #include <array>
+#include <atomic>
 #include <vector>
 #include <cstdint>
 #include <memory>
@@ -19,7 +19,6 @@
 #include "ColorManagementManager.h"
 #include "MultiInkLinearization.h"
 #include "MultiInkToneBuilder.h"
-#include "MultiInkScreenEngine.h"
 #include "MultiInkTypes.h"
 #include "IPrintOutputClient.h"
 #include "RasterAlphaMask.h"
@@ -46,10 +45,12 @@ public:
 signals:
     void prnGenerationFinished(bool success);
     void outputPhaseChanged(const QString& phase);
+    void outputProgressChanged(qint64 completed, qint64 total);
 
 public slots:
     Q_INVOKABLE void runPRNGeneration(const QVariantMap& jobMap, const QString& outputPath);
     Q_INVOKABLE void runDirectPrint(const QVariantMap& jobMap);
+    Q_INVOKABLE void cancelOutput();
 
 public:
     // Manager wiring
@@ -104,40 +105,22 @@ public:
     Q_INVOKABLE bool isLinearizationEnabled() const;
 
 private:
-    struct RasterPayload {
-        std::vector<std::vector<std::vector<uint8_t>>> packedLines;
-        std::vector<int> channelOrder;
-        int width = 0;
-        int height = 0;
-        int xdpi = 0;
-        int ydpi = 0;
-        int bytesPerLine = 0;
-    };
-
     // Internal helpers
-    bool loadMaskRaw(const QString& key,
-                     std::vector<uint8_t>& maskRaw,
-                     int& maskW,
-                     int& maskH) const;
-
-    bool loadExternalPlateTone(const QString& platePath,
-                               std::vector<uint8_t>& outTone,
-                               int width,
-                               int height) const;
-
     bool applyDeviceLinkConversion(const QString& deviceLinkPath);
     bool reloadLinearizationFromManager();
 
-    std::array<Magick::Image, 4> separateCMYK(Magick::Image& cmykImage);
     QString maskKeyForChannel(InkMode mode, int channelIndex) const;
 
-    bool prepareJobForOutput(const QVariantMap& jobMap, const QString& outputPathForLogging);
-    bool buildRasterPayload(int xdpi, int ydpi, RasterPayload& payload);
-    bool applySpecialtyBlanking(RasterPayload& payload) const;
-    bool writePRNFile(const RasterPayload& payload,
+    bool prepareJobForOutput(const QVariantMap& jobMap,
+                             const QString& outputPathForLogging,
+                             bool includeFinalPrn);
+    bool loadInputImageForOutput(const QString& imagePath, int xdpi, int ydpi);
+    bool buildRasterSpool(int xdpi, int ydpi, DirectPrintSpool& spool,
+                          bool includeFinalPrn = false);
+    bool writePRNFile(const DirectPrintSpool& spool,
                       const QString& outputPath);
-    bool sendDirectPrint(const RasterPayload& payload, const QVariantMap& jobMap);
-    DirectPrintSettings directPrintSettingsFromJob(const QVariantMap& jobMap, const RasterPayload& payload) const;
+    bool sendDirectPrint(const DirectPrintSpool& spool, const QVariantMap& jobMap);
+    DirectPrintSettings directPrintSettingsFromJob(const QVariantMap& jobMap, const DirectPrintSpool& spool) const;
 
 private:
     // Runtime mode/config
@@ -153,11 +136,10 @@ private:
     // Working images / paths
     Magick::Image inputImage;
     RasterAlphaMask sourceAlphaMask;
-    QString originalFilename;
-    QString tempImagePath;
-    std::unique_ptr<QTemporaryDir> tempDir;
     QString m_whitePlatePath;
     QString m_varnishPlatePath;
+    double m_inputXDpi = 600.0;
+    double m_inputYDpi = 600.0;
 
     // ICC state
     QString defaultOutputICCPath;
@@ -177,4 +159,5 @@ private:
     // Screening state
     MultiInkDotStrategy dotStrategy;
     uint32_t screenSeed = 0;
+    std::atomic_bool m_cancelRequested{false};
 };

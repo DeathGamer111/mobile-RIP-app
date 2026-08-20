@@ -1,12 +1,13 @@
 #include "PrintJobCMYK.h"
+#include "BoundedRasterPipeline.h"
+#include "ImagePhysicalSize.h"
 #include "NocaiPrnWriter.h"
-#include <QTemporaryDir>
-#include <QTemporaryFile>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QDateTime>
 #include <QProcess>
+#include <QScopeGuard>
 #include <QDebug>
 #include <QUrl>
 #include <algorithm>
@@ -21,30 +22,34 @@
  * Core stages (in generateFinalPRN):
  *   1) DPI scaling
  *   2) CMYK channel separation
- *   3) Blue-noise thresholding (FM screen) with highlight floor gating
- *   4) Dot classification (small/medium/large) using mask-relative thresholds
- *   5) Optional neighborhood-based “promotion” to reduce peppering
- *   6) 2bpp packing per channel and PRN write with simple header
+ *   3) Optional X-33 CMYK transfer-curve linearization
+ *   4) Blue-noise thresholding (FM screen) with highlight floor gating
+ *   5) Dot classification (small/medium/large) using mask-relative thresholds
+ *   6) Optional neighborhood-based “promotion” to reduce peppering
+ *   7) 2bpp packing per channel and PRN write with simple header
  */
  
  
 // Constructor; No-operation; state set by loader and setters.
 PrintJobCMYK::PrintJobCMYK(QObject* parent) : QObject(parent) {}
 
-
-// Per-pixel hash used to derive stable channel-specific phase and probabilistic swaps.
-static inline uint32_t pxhash(uint32_t x, uint32_t y, uint32_t ch, uint32_t seed=0x9E3779B9u) {
-    uint32_t h = x * 0x85EBCA6Bu ^ y * 0xC2B2AE35u ^ (ch+1) * 0x27D4EB2Du ^ seed;
-    h ^= h >> 16; h *= 0x7FEB352Du; h ^= h >> 15; h *= 0x846CA68Bu; h ^= h >> 16;
+#if defined(PRINTFLOW_LEGACY_RASTER_REFERENCE)
+// Deterministic reference helpers compiled only into the legacy test target.
+static inline uint32_t pxhash(
+    uint32_t x, uint32_t y, uint32_t ch, uint32_t seed = 0x9E3779B9u)
+{
+    uint32_t h = x * 0x85EBCA6Bu ^ y * 0xC2B2AE35u ^
+                 (ch + 1) * 0x27D4EB2Du ^ seed;
+    h ^= h >> 16; h *= 0x7FEB352Du; h ^= h >> 15;
+    h *= 0x846CA68Bu; h ^= h >> 16;
     return h;
 }
 
-
-// 8-bit linear interpolation helper: w in [0..255].
-static inline uint8_t lerp_u8(uint8_t a, uint8_t b, uint8_t w /*0..255*/) {
-    // (1 - w/255) * a + (w/255) * b
-    return static_cast<uint8_t>(((255 - w) * a + w * b) / 255);
+static inline uint8_t lerp_u8(uint8_t a, uint8_t b, uint8_t weight)
+{
+    return static_cast<uint8_t>(((255 - weight) * a + weight * b) / 255);
 }
+#endif
 
 
 /* === Async entry point from QML ===
@@ -55,44 +60,55 @@ static inline uint8_t lerp_u8(uint8_t a, uint8_t b, uint8_t w /*0..255*/) {
  * - Calls generateFinalPRN and emits prnGenerationFinished
  */
 void PrintJobCMYK::runPRNGeneration(const QVariantMap& jobMap, const QString& outputPath) {
+    m_cancelRequested.store(false, std::memory_order_relaxed);
     (void) QtConcurrent::run([=]() {
-        emit outputPhaseChanged(QStringLiteral("rasterizing"));
+        emit outputPhaseChanged(QStringLiteral("preprocessing"));
         int xdpi = 0;
         int ydpi = 0;
         bool success = const_cast<PrintJobCMYK*>(this)->prepareJobForOutput(
-            jobMap, xdpi, ydpi);
-        RasterPayload payload;
+            jobMap, xdpi, ydpi, true);
+        DirectPrintSpool spool;
         if (success)
-            success = const_cast<PrintJobCMYK*>(this)->buildRasterPayload(
-                xdpi, ydpi, payload);
+            success = const_cast<PrintJobCMYK*>(this)->buildRasterSpool(
+                xdpi, ydpi, spool, true);
         if (success) {
             emit outputPhaseChanged(QStringLiteral("generatingPrn"));
             success = const_cast<PrintJobCMYK*>(this)->writePRNFile(
-                payload, outputPath);
+                spool, outputPath);
         }
-
+        PrintFlowRasterSpool::remove(spool);
         emit prnGenerationFinished(success);
     });
 }
 
 void PrintJobCMYK::runDirectPrint(const QVariantMap& jobMap) {
+    m_cancelRequested.store(false, std::memory_order_relaxed);
     (void) QtConcurrent::run([=]() {
-        emit outputPhaseChanged(QStringLiteral("rasterizing"));
+        emit outputPhaseChanged(QStringLiteral("preprocessing"));
         int xdpi = 0;
         int ydpi = 0;
-        bool success = const_cast<PrintJobCMYK*>(this)->prepareJobForOutput(jobMap, xdpi, ydpi);
-        RasterPayload payload;
+        bool success = const_cast<PrintJobCMYK*>(this)->prepareJobForOutput(
+            jobMap, xdpi, ydpi, false);
+        DirectPrintSpool spool;
         if (success)
-            success = const_cast<PrintJobCMYK*>(this)->buildRasterPayload(xdpi, ydpi, payload);
+            success = const_cast<PrintJobCMYK*>(this)->buildRasterSpool(xdpi, ydpi, spool);
         if (success) {
             emit outputPhaseChanged(QStringLiteral("printing"));
-            success = const_cast<PrintJobCMYK*>(this)->sendDirectPrint(payload, jobMap);
+            success = const_cast<PrintJobCMYK*>(this)->sendDirectPrint(spool, jobMap);
         }
+        PrintFlowRasterSpool::remove(spool);
         emit prnGenerationFinished(success);
     });
 }
 
-bool PrintJobCMYK::prepareJobForOutput(const QVariantMap& jobMap, int& xdpi, int& ydpi) {
+void PrintJobCMYK::cancelOutput()
+{
+    m_cancelRequested.store(true, std::memory_order_relaxed);
+}
+
+bool PrintJobCMYK::prepareJobForOutput(
+    const QVariantMap& jobMap, int& xdpi, int& ydpi, bool includeFinalPrn) {
+    BoundedRasterPipeline::configureImageMagickCache();
     prepareAssets();
     qDebug() << "PrintJobCMYK::prepareJobForOutput: assetsExtractPath =" << assetsExtractPath;
 
@@ -121,8 +137,7 @@ bool PrintJobCMYK::prepareJobForOutput(const QVariantMap& jobMap, int& xdpi, int
         : QVariantMap();
     const QString whiteStrategy = jobMap.value("whiteStrategy").toString().trimmed();
     bool recognizedWhiteStrategy = false;
-    x33WhiteMode = X33WhiteToneBuilder::modeFromJob(
-        whiteStrategy, &recognizedWhiteStrategy);
+    x33WhiteMode = X33WhiteToneBuilder::modeFromJob(whiteStrategy, &recognizedWhiteStrategy);
     if (whiteStrategy.compare(QStringLiteral("Use Global Setting"), Qt::CaseInsensitive) == 0) {
         x33WhiteMode = static_cast<X33WhiteToneBuilder::Mode>(
             std::clamp(whiteParams.value("whiteMode", 0).toInt(), 0, 3));
@@ -151,6 +166,9 @@ bool PrintJobCMYK::prepareJobForOutput(const QVariantMap& jobMap, int& xdpi, int
     x33WhiteEnablePromotion = whiteParams.value(
         "whiteEnablePromotion", false).toBool();
 
+    if (!reloadLinearizationFromManager())
+        return false;
+
     auto normalizeLocalPath = [](const QString& value) {
         return value.startsWith("file:", Qt::CaseInsensitive) ? QUrl(value).toLocalFile() : value;
     };
@@ -166,12 +184,57 @@ bool PrintJobCMYK::prepareJobForOutput(const QVariantMap& jobMap, int& xdpi, int
     const QString jobProfile = jobMap.value("colorProfile").toString().trimmed();
     if (looksLikeIccPath(jobProfile))
         outputICC = normalizeLocalPath(jobProfile);
-    else if (m_colorManager && looksLikeIccPath(m_colorManager->effectiveOutputProfile()))
-        outputICC = normalizeLocalPath(m_colorManager->effectiveOutputProfile());
+    else if (m_colorManager) {
+        const QString familyProfile =
+            m_colorManager->effectiveOutputProfileForPrinterAndInkMode(
+                QStringLiteral("X-33"), 4);
+        if (looksLikeIccPath(familyProfile))
+            outputICC = normalizeLocalPath(familyProfile);
+        else if (looksLikeIccPath(m_colorManager->effectiveOutputProfile()))
+            outputICC = normalizeLocalPath(m_colorManager->effectiveOutputProfile());
+    }
     if (outputICC.isEmpty())
         outputICC = defaultOutputICCPath;
 
-    if (!loadInputImage(imagePath))
+    const QString localImagePath = imagePath.startsWith("file:", Qt::CaseInsensitive)
+        ? QUrl(imagePath).toLocalFile() : imagePath;
+    BoundedRasterPipeline::SourceInfo sourceInfo;
+    QString storageError;
+    if (!BoundedRasterPipeline::inspectSource(
+            localImagePath, xdpi, ydpi, 720.0, 720.0,
+            &sourceInfo, &storageError)) {
+        qWarning().noquote() << "PrintJobCMYK:" << storageError;
+        return false;
+    }
+    const QSize preflightOutputSize = ImagePhysicalSize::outputPixelSize(
+        size_t(sourceInfo.width), size_t(sourceInfo.height),
+        {sourceInfo.xDpi, sourceInfo.yDpi, true}, xdpi, ydpi);
+    const bool whiteEnabled = x33WhiteMode != X33WhiteToneBuilder::Mode::Off;
+    QStringList maskPaths = {
+        assetsExtractPath + "/mask_512_c.tiff",
+        assetsExtractPath + "/mask_512_m.tiff",
+        assetsExtractPath + "/mask_512_y.tiff",
+        assetsExtractPath + "/mask_512_k.tiff"
+    };
+    if (whiteEnabled)
+        maskPaths.append(assetsExtractPath + QString("/mask_512_%1.tiff").arg(x33WhiteMaskKey));
+    quint64 maskCacheBytes = 0;
+    if (!preflightOutputSize.isValid()
+        || !BoundedRasterPipeline::estimateMaskCacheStorage(
+            maskPaths, &maskCacheBytes, &storageError)
+        || !BoundedRasterPipeline::preflightStorage(
+            preflightOutputSize.width(), preflightOutputSize.height(),
+            sourceInfo.width, sourceInfo.height, whiteEnabled ? 5 : 4,
+            whiteEnabled ? 6 : 4, includeFinalPrn, sourceInfo.hasAlpha,
+            whiteEnabled && x33WhiteMode == X33WhiteToneBuilder::Mode::Plate ? 1 : 0,
+            maskCacheBytes, &storageError)) {
+        if (storageError.isEmpty())
+            storageError = QStringLiteral("Could not resolve raster dimensions for storage preflight.");
+        qWarning().noquote() << "PrintJobCMYK:" << storageError;
+        return false;
+    }
+
+    if (!loadInputImageForOutput(imagePath, xdpi, ydpi))
         return false;
 
     bool success = false;
@@ -179,11 +242,13 @@ bool PrintJobCMYK::prepareJobForOutput(const QVariantMap& jobMap, int& xdpi, int
         const QString inputICC = assetsExtractPath + "/sRGBProfile.icm";
         success = !outputICC.isEmpty() && applyICCConversion(inputICC, outputICC);
     } else if (!useDefaultInputCMYK) {
+        qDebug() << "PrintJobCMYK: input CMYK — skipping ICC conversion.";
         success = true;
     } else {
         QString inputICC = defaultInputCMYKPath;
-        if (m_colorManager && !m_colorManager->defaultInputProfile().trimmed().isEmpty())
+        if (m_colorManager && !m_colorManager->defaultInputProfile().trimmed().isEmpty()) {
             inputICC = m_colorManager->defaultInputProfile().trimmed();
+        }
         success = (inputICC.isEmpty() || outputICC.isEmpty())
             ? true
             : applyICCConversion(inputICC, outputICC);
@@ -196,26 +261,119 @@ bool PrintJobCMYK::prepareJobForOutput(const QVariantMap& jobMap, int& xdpi, int
 }
 
 
-// Main PRN generation: separation -> threshold -> classify -> promote -> pack -> write.
-bool PrintJobCMYK::generateFinalPRN(const QString& outputPath, int xdpi, int ydpi) {
-    RasterPayload payload;
-    return buildRasterPayload(xdpi, ydpi, payload) && writePRNFile(payload, outputPath);
+bool PrintJobCMYK::reloadLinearizationFromManager()
+{
+    x33Linearization.clearExternalCurves();
+    x33LinearizationPath.clear();
+
+    if (!m_colorManager) {
+        qWarning() << "PrintJobCMYK: no ColorManagementManager is attached; bypassing X-33 linearization.";
+        return true;
+    }
+
+    const bool enabled = m_colorManager->linearizationEnabled();
+    qDebug() << "PrintJobCMYK: X-33 linearization enabled ="
+             << (enabled ? "true" : "false");
+    if (!enabled) {
+        qDebug() << "PrintJobCMYK: X-33 linearization disabled; bypassing transfer curves.";
+        return true;
+    }
+
+    QString xmlPath = m_colorManager
+                          ->effectiveLinearizationPathForPrinterAndInkMode(
+                              m_colorManager->selectedPrinter(), 4)
+                          .trimmed();
+    if (xmlPath.startsWith("file:", Qt::CaseInsensitive))
+        xmlPath = QUrl(xmlPath).toLocalFile();
+
+    if (xmlPath.isEmpty()) {
+        qWarning() << "PrintJobCMYK: X-33 linearization is enabled but no XML file is resolved; bypassing transfer curves.";
+        return true;
+    }
+    if (!QFileInfo::exists(xmlPath)) {
+        qWarning() << "PrintJobCMYK: X-33 linearization XML does not exist:"
+                   << xmlPath << "- bypassing transfer curves.";
+        return true;
+    }
+    if (!x33Linearization.loadTransferCurveXml(xmlPath)) {
+        qWarning() << "PrintJobCMYK: failed to load X-33 linearization XML:"
+                   << xmlPath << "error =" << x33Linearization.lastError()
+                   << "- bypassing transfer curves.";
+        x33Linearization.clearExternalCurves();
+        return true;
+    }
+
+    x33LinearizationPath = xmlPath;
+    qDebug() << "PrintJobCMYK: loaded X-33 linearization XML:"
+             << x33LinearizationPath;
+    return true;
 }
 
-bool PrintJobCMYK::buildRasterPayload(int xdpi, int ydpi, RasterPayload& payload) {
+
+// Main PRN generation: separation -> threshold -> classify -> promote -> pack -> write.
+bool PrintJobCMYK::generateFinalPRN(const QString& outputPath, int xdpi, int ydpi) {
+    m_cancelRequested.store(false, std::memory_order_relaxed);
+    DirectPrintSpool spool;
+    const bool ok = buildRasterSpool(xdpi, ydpi, spool, true) &&
+                    writePRNFile(spool, outputPath);
+    PrintFlowRasterSpool::remove(spool);
+    return ok;
+}
+
+bool PrintJobCMYK::buildRasterSpool(
+    int xdpi, int ydpi, DirectPrintSpool& spool, bool includeFinalPrn) {
     try {
         if (inputImage.colorSpace() != Magick::CMYKColorspace) {
             qWarning() << "Input image is not in CMYK colorspace.";
             return false;
         }
         
-        // === Step 1: DPI scaling relative to 720 baseline.
-      	double scaleX = static_cast<double>(xdpi) / 720.0;
-        double scaleY = static_cast<double>(ydpi) / 720.0;
+        // Preserve source physical dimensions while converting its pixels to
+        // the selected printer resolution.
+        const QSize outputSize = ImagePhysicalSize::outputPixelSize(
+            inputImage.columns(), inputImage.rows(),
+            {inputXDpi, inputYDpi, true}, xdpi, ydpi);
+        if (!outputSize.isValid()) {
+            qWarning() << "PrintJobCMYK: could not resolve output raster dimensions.";
+            return false;
+        }
 
-        if (scaleX != 1.0 || scaleY != 1.0) {
-            int newWidth = static_cast<int>(inputImage.columns() * scaleX);
-            int newHeight = static_cast<int>(inputImage.rows() * scaleY);
+        const bool whiteEnabled = x33WhiteMode != X33WhiteToneBuilder::Mode::Off;
+        const std::vector<int> nocaiOrder = whiteEnabled
+            ? std::vector<int>({2, 1, 0, 3, 4, 4})
+            : std::vector<int>({2, 1, 0, 3});
+        const int logicalChannelCount = whiteEnabled ? 5 : 4;
+        QString storageError;
+        QStringList chKeys = {"c", "m", "y", "k"};
+        if (whiteEnabled)
+            chKeys.append(x33WhiteMaskKey);
+        QStringList maskPaths;
+        for (const QString& key : chKeys)
+            maskPaths.append(assetsExtractPath +
+                QString("/mask_512_%1.tiff").arg(key));
+        quint64 maskCacheBytes = 0;
+        if (!BoundedRasterPipeline::estimateMaskCacheStorage(
+                maskPaths, &maskCacheBytes, &storageError)) {
+            qWarning().noquote() << "PrintJobCMYK:" << storageError;
+            return false;
+        }
+        if (!BoundedRasterPipeline::preflightStorage(
+                outputSize.width(), outputSize.height(),
+                static_cast<int>(inputImage.columns()),
+                static_cast<int>(inputImage.rows()), logicalChannelCount,
+                int(nocaiOrder.size()), includeFinalPrn,
+                sourceAlphaMask.isActive(),
+                whiteEnabled && x33WhiteMode == X33WhiteToneBuilder::Mode::Plate ? 1 : 0,
+                maskCacheBytes,
+                &storageError)) {
+            qWarning().noquote() << "PrintJobCMYK:" << storageError;
+            return false;
+        }
+
+        if (outputSize.width() != static_cast<int>(inputImage.columns()) ||
+            outputSize.height() != static_cast<int>(inputImage.rows())) {
+            const int newWidth = outputSize.width();
+            const int newHeight = outputSize.height();
 
 			// Apply Resize to fit output DPI
 			QString resizeGeometry = QString("%1x%2!").arg(newWidth).arg(newHeight);
@@ -227,258 +385,213 @@ bool PrintJobCMYK::buildRasterPayload(int xdpi, int ydpi, RasterPayload& payload
 
             qDebug() << "Rescaled image for output DPI:" << xdpi << "x" << ydpi << "→" << inputImage.columns() << "x" << inputImage.rows();
         }
-        
-        // === Step 2: Separate into CMYK channels
-		auto cmykChannels = separateCMYK(inputImage);
-        int width = static_cast<int>(cmykChannels[0].columns());
-        int height = static_cast<int>(cmykChannels[0].rows());
+        const int width = static_cast<int>(inputImage.columns());
+        const int height = static_cast<int>(inputImage.rows());
 
-        std::array<std::vector<uint8_t>, 4> cmykTones;
-        for (int channel = 0; channel < 4; ++channel) {
-            cmykTones[channel].resize(static_cast<size_t>(width) * height);
-            cmykChannels[channel].write(
-                0, 0, width, height, "I", Magick::CharPixel,
-                cmykTones[channel].data());
-            if (!sourceAlphaMask.applyTo(cmykTones[channel])) {
-                qWarning() << "PrintJobCMYK: source alpha mask does not match the CMYK raster.";
+        BoundedRasterPipeline::CanonicalCmykFile canonical;
+        emit outputPhaseChanged(QStringLiteral("preprocessing"));
+        QString error;
+        if (!canonical.create(
+                inputImage, sourceAlphaMask,
+                BoundedRasterPipeline::scratchDirectory(), &m_cancelRequested,
+                [this](qint64 completed, qint64 total) {
+                    emit outputProgressChanged(completed, total);
+                }, &error)) {
+            qWarning().noquote() << "PrintJobCMYK:" << error;
+            return false;
+        }
+
+        std::unique_ptr<Magick::Image> whitePlate;
+        if (whiteEnabled && x33WhiteMode == X33WhiteToneBuilder::Mode::Plate) {
+            QString platePath = x33WhitePlatePath.trimmed();
+            if (platePath.startsWith("file:", Qt::CaseInsensitive))
+                platePath = QUrl(platePath).toLocalFile();
+            if (platePath.isEmpty() || !QFileInfo::exists(platePath)) {
+                qWarning() << "PrintJobCMYK: X-33 white plate not found:" << x33WhitePlatePath;
                 return false;
+            }
+            whitePlate = std::make_unique<Magick::Image>();
+            whitePlate->read(platePath.toStdString());
+            whitePlate->colorSpace(Magick::GRAYColorspace);
+            whitePlate->type(Magick::GrayscaleType);
+            if (static_cast<int>(whitePlate->columns()) != width ||
+                static_cast<int>(whitePlate->rows()) != height) {
+                whitePlate->resize(Magick::Geometry(
+                    QString("%1x%2!").arg(width).arg(height).toStdString()));
             }
         }
 
-        const bool whiteEnabled = x33WhiteMode != X33WhiteToneBuilder::Mode::Off;
-        std::vector<uint8_t> whiteTone;
-        if (whiteEnabled) {
-            X33WhiteToneBuilder::BuildRequest whiteRequest;
-            whiteRequest.cmykTones = &cmykTones;
-            whiteRequest.width = width;
-            whiteRequest.height = height;
-            whiteRequest.mode = x33WhiteMode;
-            whiteRequest.threshold = x33WhiteThreshold;
-            whiteRequest.density = x33WhiteDensity;
-            whiteRequest.platePath = x33WhitePlatePath;
+        if (x33Linearization.hasExternalCurves()) {
+            qDebug() << "PrintJobCMYK: applied X-33 linearization curves to CMYK tone channels:"
+                     << x33LinearizationPath;
+        }
+        spool = {};
+        spool.channelOrder = nocaiOrder;
+        spool.logicalChannelCount = logicalChannelCount;
+        spool.width = width;
+        spool.height = height;
+        spool.xdpi = xdpi;
+        spool.ydpi = ydpi;
+        spool.bytesPerLine = (((width + 3) / 4) + 3) & ~3;
+        spool.format = DirectPrintRasterFormat::NocaiX33Standard;
+        spool.canonicalHeader = NocaiPrnWriter::makeStandardX33Header(
+            width, height, xdpi, ydpi, spool.bytesPerLine, int(nocaiOrder.size()));
 
-            if (!X33WhiteToneBuilder::build(
-                    whiteRequest,
-                    whiteTone,
-                    [this](const QString& platePath,
-                           std::vector<uint8_t>& outTone,
-                           int plateWidth,
-                           int plateHeight) {
-                        return loadExternalPlateTone(
-                            platePath, outTone, plateWidth, plateHeight);
-                    })) {
-                qWarning() << "PrintJobCMYK: failed to build the X-33 white plate.";
-                return false;
-            }
+        PrintFlowRasterSpool::Writer writer;
+        if (!writer.create(BoundedRasterPipeline::scratchDirectory(), spool, &error)) {
+            qWarning().noquote() << "PrintJobCMYK:" << error;
+            return false;
         }
 
-        const std::vector<int> nocaiOrder = whiteEnabled
-            ? std::vector<int>({2, 1, 0, 3, 4, 4})
-            : std::vector<int>({2, 1, 0, 3});
-        QStringList chKeys = {"c", "m", "y", "k"};
-        if (whiteEnabled)
-            chKeys.append(x33WhiteMaskKey);
-        const int logicalChannelCount = whiteEnabled ? 5 : 4;
-
-        // === Step 3: Prepare mask file paths (blue noise masks live in assetsExtractPath).
-        std::vector<QString> maskPaths(logicalChannelCount);
-        for (int i = 0; i < logicalChannelCount; ++i)
-            maskPaths[i] = assetsExtractPath + QString("/mask_512_%1.tiff").arg(chKeys[i]);
-
-        // === Step 4: Per-channel FM screen, dot classification, promotion, packing.
-        std::vector<std::vector<std::vector<uint8_t>>> allPacked(logicalChannelCount);
+        std::vector<BoundedRasterPipeline::ScreenChannel> screenChannels;
+        screenChannels.reserve(logicalChannelCount);
         bool skippedPromotion = false;
-
-        for (int ch = 0; ch < logicalChannelCount; ++ch) {
-            
-            // Load Image and Blue Noise Mask
-            Magick::Image maskImg;
-            maskImg.read(maskPaths[ch].toStdString());
-
-			const std::vector<uint8_t>& channelBytes = ch < 4
-                ? cmykTones[ch]
-                : whiteTone;
-
-			// Read the mask at its **native** size
-			const int maskW = static_cast<int>(maskImg.columns());
-			const int maskH = static_cast<int>(maskImg.rows());
-			std::vector<uint8_t> maskRaw(maskW * maskH);
-			maskImg.write(0, 0, maskW, maskH, "I", Magick::CharPixel, maskRaw.data());
-
-			// FM screen with soft gate + highlight floor bias + scaled mask sampling
-			std::vector<uint8_t> dithered(width * height, 0);	// Binary FM pass/fail (0/255).
-			std::vector<uint8_t> classMask(width * height, 0); 	// Mask samples used for dot classification
-
-			DotStrategy activeStrategy = dotStrategy;
-            if (ch == 4 && x33WhiteUseOwnDotStrategy) {
-                activeStrategy.smallDotThreshold = x33WhiteSmallDotThreshold;
-                activeStrategy.medDotThreshold = x33WhiteMedDotThreshold;
-                activeStrategy.enablePromotion = x33WhiteEnablePromotion;
+        for (int channel = 0; channel < logicalChannelCount; ++channel) {
+            DotStrategy active = dotStrategy;
+            if (channel == 4 && x33WhiteUseOwnDotStrategy) {
+                active.smallDotThreshold = x33WhiteSmallDotThreshold;
+                active.medDotThreshold = x33WhiteMedDotThreshold;
+                active.enablePromotion = x33WhiteEnablePromotion;
             }
-
-			const bool isK = (ch == 3);
-			const uint8_t floorRange = isK ? activeStrategy.floorRangeK : activeStrategy.floorRangeCMY;
-			const uint8_t floorMax   = isK ? activeStrategy.floorMaxK   : activeStrategy.floorMaxCMY;
-			const int minT  = std::clamp(activeStrategy.minInkThreshold, 0, 254);
-			const int denom = 255 - minT;
-
-			// Per-channel phase from seed; wrap in **mask** space (no scaling)
-			const uint32_t h = pxhash(0xB, 0xC, ch, screenSeed);
-			const int offXmask = static_cast<int>((h      ) & 0x7FFFFFFF) % maskW;
-			const int offYmask = static_cast<int>((h >> 16) & 0x7FFFFFFF) % maskH;
-			auto sampleMask = [&](int x, int y) -> uint8_t {
-				int mx = x + offXmask; if (mx >= maskW) mx %= maskW;
-				int my = y + offYmask; if (my >= maskH) my %= maskH;
-				return maskRaw[my * maskW + mx];
-			};
-
-			// FM thresholding with highlight floor gating (prevents dropout in very light tones).
-			for (int y = 0; y < height; ++y) {
-				const int rowBase = y * width;
-				for (int x = 0; x < width; ++x) {
-					const int idx = rowBase + x;
-
-					const uint8_t u = channelBytes[idx];
-					if (u <= minT) { dithered[idx] = 0; classMask[idx] = 255; continue; }
-
-					// Normalize [minT+1..255] → [0..255]
-					uint16_t uEff = static_cast<uint16_t>(u - minT) * 255 / denom;
-
-					// Gentle highlight floor (prevents dropouts in very light tones)
-					if (floorRange > 0 && floorMax > 0 && uEff < floorRange) {
-						const uint16_t bias = static_cast<uint16_t>(floorMax) * (floorRange - uEff) / floorRange;
-						uEff = std::min<uint16_t>(255, uEff + bias);
-					}
-
-					const uint8_t t = sampleMask(x, y);
-					dithered[idx]  = (uEff > t) ? 255 : 0;
-					classMask[idx] = t; // Reuse the same mask value for dot-class decisions.
-				}
-			}
-
-			// Dot classification uses mask-relative thresholds that adapt across tone.
-			auto dotMap = dotClassification(dithered, classMask, channelBytes, width, height, activeStrategy);
-
-            // Optional neighborhood “promotion” to enlarge dots in dense regions (reduces peppering).
-            if (activeStrategy.enablePromotion) {
-                apply4x4Promotion(dotMap, channelBytes, width, height);
-            } else {
-                skippedPromotion = true;
-			}
-
-            // Pack to 2bpp (4 pixels per byte, big-endian within the byte).
-            auto packed = NocaiPrnWriter::packTo2Bpp(dotMap, width, height);
-            allPacked[ch] = std::move(packed);
+            BoundedRasterPipeline::ScreenChannel request;
+            request.maskPath = assetsExtractPath +
+                QString("/mask_512_%1.tiff").arg(chKeys[channel]);
+            request.minInkThreshold = active.minInkThreshold;
+            request.smallDotThreshold = active.smallDotThreshold;
+            request.medDotThreshold = active.medDotThreshold;
+            request.floorRange = channel == 3 ? active.floorRangeK : active.floorRangeCMY;
+            request.floorMax = channel == 3 ? active.floorMaxK : active.floorMaxCMY;
+            request.enableDotSwap = active.enableDotSwap;
+            request.enablePromotion = active.enablePromotion;
+            request.useEffectiveTone = false;
+            skippedPromotion = skippedPromotion || !active.enablePromotion;
+            screenChannels.push_back(std::move(request));
         }
-
-        // Promotion is configured per logical channel, but one summary is
-        // sufficient when one or more channels bypass the stage.
         if (skippedPromotion)
             qDebug() << "Dot Promotion Disabled — skipping Dot Promotion.";
 
-        payload.packedLines = std::move(allPacked);
-        payload.channelOrder = nocaiOrder;
-        payload.width = width;
-        payload.height = height;
-        payload.xdpi = xdpi;
-        payload.ydpi = ydpi;
-        payload.bytesPerLine = payload.packedLines.empty() || payload.packedLines[0].empty()
-            ? 0
-            : static_cast<int>(payload.packedLines[0][0].size());
+        emit outputPhaseChanged(QStringLiteral("rasterizing"));
+        const auto toneProvider = [&](int firstRow, int rowCount,
+                                      std::vector<std::vector<uint8_t>>& tones,
+                                      QString* providerError) -> bool {
+            std::vector<uint8_t> raw;
+            if (!canonical.readRows(firstRow, rowCount, raw, providerError))
+                return false;
+            const size_t pixels = static_cast<size_t>(width) * rowCount;
+            std::array<std::vector<uint8_t>, 4> cmyk;
+            for (auto& channel : cmyk)
+                channel.resize(pixels);
+            for (size_t pixel = 0; pixel < pixels; ++pixel)
+                for (int channel = 0; channel < 4; ++channel)
+                    cmyk[channel][pixel] = raw[pixel * 4ULL + size_t(channel)];
+            if (x33Linearization.hasExternalCurves() &&
+                !x33Linearization.applyFourColorTones(cmyk)) {
+                if (providerError)
+                    *providerError = QStringLiteral("Could not apply X-33 linearization to a raster strip.");
+                return false;
+            }
+            tones.assign(logicalChannelCount, {});
+            if (whiteEnabled) {
+                X33WhiteToneBuilder::BuildRequest request;
+                request.cmykTones = &cmyk;
+                request.width = width;
+                request.height = rowCount;
+                request.mode = x33WhiteMode;
+                request.threshold = x33WhiteThreshold;
+                request.density = x33WhiteDensity;
+                request.platePath = x33WhitePlatePath;
+                if (!X33WhiteToneBuilder::build(
+                        request, tones[4],
+                        [&](const QString&, std::vector<uint8_t>& plate,
+                            int plateWidth, int plateHeight) {
+                            if (!whitePlate || plateWidth != width || plateHeight != rowCount)
+                                return false;
+                            plate.resize(pixels);
+                            whitePlate->write(0, firstRow, width, rowCount,
+                                              "I", Magick::CharPixel, plate.data());
+                            return true;
+                        })) {
+                    if (providerError)
+                        *providerError = QStringLiteral("Could not build the X-33 white strip.");
+                    return false;
+                }
+                if (x33Linearization.hasExternalCurves() &&
+                    !x33Linearization.applyWhiteTone(tones[4]))
+                    return false;
+            }
+            for (int channel = 0; channel < 4; ++channel)
+                tones[channel] = std::move(cmyk[channel]);
+            return true;
+        };
+
+        if (!BoundedRasterPipeline::screenToSpool(
+                width, height, screenSeed, {}, screenChannels, toneProvider,
+                writer, &m_cancelRequested,
+                [this](qint64 completed, qint64 total) {
+                    emit outputProgressChanged(completed, total);
+                }, &error)) {
+            qWarning().noquote() << "PrintJobCMYK:" << error;
+            return false;
+        }
+        emit outputPhaseChanged(QStringLiteral("spooling"));
+        if (!writer.finalize(
+                &spool, &error,
+                [this]() {
+                    return m_cancelRequested.load(std::memory_order_relaxed);
+                })) {
+            qWarning().noquote() << "PrintJobCMYK:" << error;
+            return false;
+        }
 
         if (whiteEnabled) {
             qDebug() << "PrintJobCMYK: X-33 white enabled; prepared YMCKWW raster with"
-                     << payload.channelOrder.size() << "physical planes.";
+                     << spool.channelOrder.size() << "physical planes.";
         }
         return true;
 
     } catch (const Magick::Exception& e) {
         qWarning() << "PRN generation failed:" << e.what();
         return false;
-    }
-}
-
-bool PrintJobCMYK::loadExternalPlateTone(
-    const QString& platePath,
-    std::vector<uint8_t>& outTone,
-    int width,
-    int height) const
-{
-    QString localPath = platePath.trimmed();
-    if (localPath.startsWith("file:", Qt::CaseInsensitive))
-        localPath = QUrl(localPath).toLocalFile();
-
-    if (localPath.isEmpty() || !QFileInfo::exists(localPath)) {
-        qWarning() << "PrintJobCMYK: X-33 white plate not found:" << platePath;
-        return false;
-    }
-
-    try {
-        Magick::Image plate;
-        plate.read(localPath.toStdString());
-        plate.colorSpace(Magick::GRAYColorspace);
-        plate.type(Magick::GrayscaleType);
-
-        if (static_cast<int>(plate.columns()) != width ||
-            static_cast<int>(plate.rows()) != height) {
-            const QString geometry = QString("%1x%2!").arg(width).arg(height);
-            plate.resize(Magick::Geometry(geometry.toStdString()));
-        }
-
-        outTone.resize(static_cast<size_t>(width) * height);
-        plate.write(
-            0, 0, width, height, "I", Magick::CharPixel, outTone.data());
-        return true;
-    } catch (const Magick::Exception& error) {
-        qWarning() << "PrintJobCMYK: failed to load X-33 white plate:"
-                   << platePath << "error:" << error.what();
+    } catch (const std::bad_alloc&) {
+        qWarning() << "PrintJobCMYK: bounded raster allocation failed.";
         return false;
     }
 }
 
-bool PrintJobCMYK::writePRNFile(const RasterPayload& payload, const QString& outputPath) {
-    return NocaiPrnWriter::writeStandardX33Prn(
-        payload.packedLines,
-        payload.channelOrder,
-        payload.width,
-        payload.height,
-        payload.xdpi,
-        payload.ydpi,
-        outputPath);
+bool PrintJobCMYK::writePRNFile(const DirectPrintSpool& spool, const QString& outputPath) {
+    return NocaiPrnWriter::writeStandardX33Prn(spool, outputPath);
 }
 
-bool PrintJobCMYK::sendDirectPrint(const RasterPayload& payload, const QVariantMap& jobMap) {
+bool PrintJobCMYK::sendDirectPrint(const DirectPrintSpool& spool, const QVariantMap& jobMap) {
     if (!m_directPrintClient) {
         qWarning() << "PrintJobCMYK: direct print client is not attached.";
         return false;
     }
 
-    DirectPrintRaster raster;
-    raster.packedLines = &payload.packedLines;
-    raster.channelOrder = payload.channelOrder;
-    raster.width = payload.width;
-    raster.height = payload.height;
-    raster.xdpi = payload.xdpi;
-    raster.ydpi = payload.ydpi;
-    raster.bytesPerLine = payload.bytesPerLine;
-    raster.format = DirectPrintRasterFormat::NocaiX33Standard;
-    raster.canonicalHeader = NocaiPrnWriter::makeStandardX33Header(
-        payload.width,
-        payload.height,
-        payload.xdpi,
-        payload.ydpi,
-        payload.bytesPerLine,
-        static_cast<int>(payload.channelOrder.size()));
-
-    const bool ok = m_directPrintClient->submitPreparedJob(
-        raster, directPrintSettingsFromJob(jobMap, payload));
+    auto* spooledClient = dynamic_cast<ISpooledPrintOutputClient*>(m_directPrintClient);
+    if (!spooledClient) {
+        qWarning() << "PrintJobCMYK: direct print client does not support bounded raster spools.";
+        return false;
+    }
+    spooledClient->setSpoolProgressCallback(
+        [this](const QString& phase, qint64 completed, qint64 total) {
+            emit outputPhaseChanged(phase);
+            emit outputProgressChanged(completed, total);
+        });
+    const auto clearProgress = qScopeGuard([spooledClient]() {
+        spooledClient->setSpoolProgressCallback({});
+    });
+    emit outputPhaseChanged(QStringLiteral("uploading"));
+    emit outputProgressChanged(0, 1);
+    const bool ok = spooledClient->submitSpooledJob(
+        spool, directPrintSettingsFromJob(jobMap, spool));
     if (!ok)
         qWarning() << "PrintJobCMYK: direct print failed:" << m_directPrintClient->lastError();
     return ok;
 }
 
 DirectPrintSettings PrintJobCMYK::directPrintSettingsFromJob(
-    const QVariantMap& jobMap, const RasterPayload& payload) const {
+    const QVariantMap& jobMap, const DirectPrintSpool& spool) const {
     QVariantMap settings = m_colorManager ? m_colorManager->directPrintSettings() : QVariantMap();
     const QVariantMap overrides = jobMap.value("directPrintSettings").toMap();
     for (auto it = overrides.begin(); it != overrides.end(); ++it)
@@ -493,12 +606,12 @@ DirectPrintSettings PrintJobCMYK::directPrintSettingsFromJob(
     out.printDirection = value("printDirection", 0);
     out.printSpeed = value("printSpeed", 1);
     out.wcSequence = value("wcSequence", 0);
-    out.eclosionGrade = value("eclosionGrade", 0);
+    out.eclosionGrade = value("eclosionGrade", 2);
     // CPrinter_Model_X33 starts with e2HeadConfig, which maps to HeadSelect=0.
     // Enforce it here so a value persisted during earlier integration tests
     // cannot select a different SDK swath layout.
     out.headSelect = 0;
-    const bool hasWhite = payload.channelOrder
+    const bool hasWhite = spool.channelOrder
         == std::vector<int>({2, 1, 0, 3, 4, 4});
     // The X-33/iQueue integration clears these when no W plane exists. With
     // white enabled, pass the raw legacy SDK values selected in Printer Setup.
@@ -570,31 +683,10 @@ bool PrintJobCMYK::applyICCConversion(const QString& inputProfile, const QString
 }
 
 
-// Split CMYK to 4 grayscale planes (“I” format); 8-bit depth.
-std::array<Magick::Image, 4> PrintJobCMYK::separateCMYK(Magick::Image& cmykImage) {
-    std::array<Magick::Image, 4> channels;
-    int width = static_cast<int>(cmykImage.columns());
-    int height = static_cast<int>(cmykImage.rows());
-
-    std::vector<uchar> rawCMYK(width * height * 4);
-    cmykImage.write(0, 0, width, height, "CMYK", Magick::CharPixel, rawCMYK.data());
-
-    for (int ch = 0; ch < 4; ++ch) {
-        std::vector<uchar> channelData(width * height);
-        for (int i = 0; i < width * height; ++i)
-            channelData[i] = rawCMYK[i * 4 + ch];
-
-        channels[ch] = Magick::Image(Magick::Geometry(width, height), "white");
-        channels[ch].depth(8);
-        channels[ch].type(Magick::GrayscaleType);
-        channels[ch].read(width, height, "I", Magick::CharPixel, channelData.data());
-    }
-
-    return channels;
-}
-
 void PrintJobCMYK::setColorManager(ColorManagementManager* mgr) {
     m_colorManager = mgr;
+    if (assetsPrepared)
+        seedX33DefaultAssets();
 }
 
 
@@ -613,6 +705,7 @@ void PrintJobCMYK::setDotStrategy(int minInkThreshold, int smallDotThreshold, in
 }
 
 
+#if defined(PRINTFLOW_LEGACY_RASTER_REFERENCE)
 /* Dot classification
  * Input:
  *   dithered: result of FM screen (0/255)
@@ -776,6 +869,7 @@ void PrintJobCMYK::apply4x4Promotion(std::vector<std::vector<uint8_t>>& dotMap,
         }
     }
 }
+#endif
 
 
 
@@ -783,28 +877,31 @@ void PrintJobCMYK::apply4x4Promotion(std::vector<std::vector<uint8_t>>& dotMap,
 
 // Read image and stage a temp file to work from (avoids touching originals).
 bool PrintJobCMYK::loadInputImage(const QString& imagePath) {
+    return loadInputImageForOutput(imagePath, 720, 720);
+}
+
+bool PrintJobCMYK::loadInputImageForOutput(
+    const QString& imagePath, int xdpi, int ydpi)
+{
     try {
         sourceAlphaMask.reset();
         QString localPath = QUrl(imagePath).toLocalFile();
+        inputImage = Magick::Image();
+        ImagePhysicalSize::setVectorReadDensity(inputImage, localPath, xdpi, ydpi);
         inputImage.read(localPath.toStdString());
-        if (!sourceAlphaMask.capture(inputImage)) {
+        const ImagePhysicalSize::Density density =
+            ImagePhysicalSize::resolvedDensity(inputImage, 720.0, 720.0);
+        inputXDpi = density.xDpi;
+        inputYDpi = density.yDpi;
+        qDebug() << "PrintJobCMYK: source density" << inputXDpi << "x"
+                 << inputYDpi << "DPI"
+                 << (density.hasPhysicalUnits ? "(file/document)" : "(720 DPI fallback)");
+        if (!sourceAlphaMask.capture(inputImage, &m_cancelRequested)) {
             qWarning() << "PrintJobCMYK: failed to preserve the source alpha channel.";
             return false;
         }
 
-        QFileInfo fileInfo(localPath);
-        originalFilename = fileInfo.fileName();
-
-        tempDir = std::make_unique<QTemporaryDir>();
-        if (!tempDir->isValid()) {
-            qWarning() << "Failed to create temp dir";
-            return false;
-        }
-
-        tempImagePath = tempDir->filePath(originalFilename);
-        inputImage.write(tempImagePath.toStdString());
-
-        qDebug() << "Loaded and copied input image to:" << tempImagePath;
+        qDebug() << "Loaded input image from:" << localPath;
         return true;
     } catch (const Magick::Exception& e) {
         qWarning() << "Image load failed:" << e.what();
@@ -889,6 +986,7 @@ void PrintJobCMYK::prepareAssets() {
 
     // If assets have been moved and directory still exists, skip all the work.
     if (assetsPrepared && !assetsExtractPath.isEmpty() && QDir(assetsExtractPath).exists()) {
+        seedX33DefaultAssets();
         qDebug() << "PrintJobCMYK: assets already prepared in" << assetsExtractPath;
         return;
     }
@@ -897,18 +995,20 @@ void PrintJobCMYK::prepareAssets() {
         ":/assets/sRGBProfile.icm",
         ":/assets/RIP_App_1440_Plain_Default.icc",
         ":/assets/RIP_App_1440_Plain_Neutral.icc",
-        ":/assets/RIP_App_Generic_CMYK.icc"
+        ":/assets/RIP_App_Generic_CMYK.icc",
+        ":/assets/RIP_App_Linearization_1440_X-33.xml"
     };
 
     const QStringList bundledFileNames = {
         "sRGBProfile.icm",
         "RIP_App_1440_Plain_Default.icc",
         "RIP_App_1440_Plain_Neutral.icc",
-        "RIP_App_Generic_CMYK.icc"
+        "RIP_App_Generic_CMYK.icc",
+        "RIP_App_Linearization_1440_X-33.xml"
     };
 
-    if (!m_assetManager.copyResourcesIfMissing(bundledResourcePaths, bundledFileNames)) {
-        qWarning() << "PrintJobCMYK: failed to copy one or more bundled runtime assets.";
+    if (!m_assetManager.syncResources(bundledResourcePaths, bundledFileNames)) {
+        qWarning() << "PrintJobCMYK: failed to stage one or more bundled runtime assets.";
         return;
     }
 
@@ -941,9 +1041,40 @@ void PrintJobCMYK::prepareAssets() {
     setDefaultOutputICCProfile(m_assetManager.assetPath("RIP_App_1440_Plain_Default.icc"));
     setDefaultInputCMYKProfile(m_assetManager.assetPath("RIP_App_Generic_CMYK.icc"));
 
+    seedX33DefaultAssets();
+
     assetsPrepared = true;
 
     qDebug() << "PrintJobCMYK assets prepared in:" << assetsExtractPath;
+}
+
+void PrintJobCMYK::seedX33DefaultAssets()
+{
+    if (!m_colorManager || assetsExtractPath.isEmpty())
+        return;
+    const auto configuredPathExists = [](const QString& value) {
+        const QString path = value.startsWith("file:", Qt::CaseInsensitive)
+            ? QUrl(value).toLocalFile() : value;
+        return !path.trimmed().isEmpty() && QFileInfo::exists(path);
+    };
+    const QString x33Profile =
+        m_assetManager.assetPath("RIP_App_1440_Plain_Default.icc");
+    const QString x33Linearization =
+        m_assetManager.assetPath("RIP_App_Linearization_1440_X-33.xml");
+    const QString configuredProfile =
+        m_colorManager->printerFamilyOutputProfile("X-33", "A");
+    if (configuredProfile.trimmed().isEmpty()
+        || !configuredPathExists(configuredProfile)) {
+        m_colorManager->setPrinterFamilyOutputProfile(
+            "X-33", "A", x33Profile);
+    }
+    const QString configuredLinearization =
+        m_colorManager->printerFamilyLinearizationPath("X-33", "A");
+    if (configuredLinearization.trimmed().isEmpty()
+        || !configuredPathExists(configuredLinearization)) {
+        m_colorManager->setPrinterFamilyLinearizationPath(
+            "X-33", "A", x33Linearization);
+    }
 }
 
 
@@ -983,48 +1114,3 @@ void PrintJobCMYK::cleanupRuntimeAssets() {
         qWarning() << "Failed to clean runtime assets.";
     }
 }
-
-
-// Commented out a simple Dot Strategy without gating or tonal awareness. Much faster and works for 90% of files
-
-/*
-std::vector<std::vector<uint8_t>> PrintJobCMYK::dotClassification(const std::vector<uint8_t>& dithered, const std::vector<uint8_t>& mask, const std::vector<uint8_t>& channel, int width, int height, const DotStrategy& strategy) {
-	std::vector<std::vector<uint8_t>> dotMap(height, std::vector<uint8_t>(width, 0));
-	
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            if (dithered[y * width + x] < 128) continue;
-
-            uint8_t t = mask[y * width + x];
-            
-			if (t >= strategy.smallDotThreshold) {
-                dotMap[y][x] = 1; // Small dot
-            } else if (t >= strategy.medDotThreshold) {
-                dotMap[y][x] = 2; // Medium dot
-            } else {
-                dotMap[y][x] = 3; // Large dot
-            }
-        }
-    }
-    return dotMap;
-}
-
-
-void PrintJobCMYK::apply4x4Promotion(std::vector<std::vector<uint8_t>>& dotMap, int width, int height) {
-    
-    for (int y = 1; y < height - 2; ++y) {
-        for (int x = 1; x < width - 2; ++x) {
-            if (dotMap[y][x] == 3) continue;
-
-            int count = 0;
-            for (int dy = -1; dy <= 2; ++dy)
-                for (int dx = -1; dx <= 2; ++dx)
-                    if (dotMap[y + dy][x + dx] > 0)
-                        ++count;
-
-            if (count >= 12)
-                dotMap[y][x] = 3;
-        }
-    }
-}
-*/

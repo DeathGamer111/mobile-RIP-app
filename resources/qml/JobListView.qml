@@ -93,13 +93,16 @@ Item {
     }
 
 
-    function directPrintSettings() {
+    function directPrintSettings(job) {
+        const perJobFeathering = job && job.feathering !== undefined
+                               ? Math.max(1, Math.min(3, job.feathering))
+                               : 2
         return {
             selectedPrinterIndex: appState.sdkSelectedPrinterIndex,
             printDirection: appState.sdkPrintDirection,
             printSpeed: appState.sdkPrintSpeed,
             wcSequence: appState.sdkWcSequence,
-            eclosionGrade: appState.sdkEclosionGrade,
+            eclosionGrade: perJobFeathering,
             headSelect: appState.sdkHeadSelect,
             whiteInkPercent: appState.sdkWhiteInkPercent,
             whiteInkPassCount: appState.sdkWhiteInkPassCount,
@@ -124,20 +127,30 @@ Item {
         appState.outputProgressMode = mode
         appState.outputProgressPhase = "rasterizing"
         appState.isGeneratingPRN = true
+        appState.outputProgressValue = 0
+        appState.outputProgressMaximum = 0
     }
 
     function endOutputProgress() {
         appState.isGeneratingPRN = false
         appState.outputProgressPhase = ""
         appState.outputProgressMode = ""
+        appState.outputProgressValue = 0
+        appState.outputProgressMaximum = 0
     }
 
     function outputProgressText() {
         switch (appState.outputProgressPhase) {
+        case "preprocessing":
+            return strings.trKey("jobs.progress.preprocessing")
         case "generatingPrn":
             return strings.trKey("jobs.progress.generatingPrn")
         case "printing":
             return strings.trKey("jobs.progress.printing")
+        case "spooling":
+            return strings.trKey("jobs.progress.spooling")
+        case "uploading":
+            return strings.trKey("jobs.progress.uploading")
         case "rasterizing":
             return strings.trKey("jobs.progress.rasterizing")
         default:
@@ -284,7 +297,7 @@ Item {
         const job = jobModel.getJob(selectedIndexes[0])
         var directJob = Object.assign({}, job)
         directJob.inkMode = appState.multiInkInkMode
-        directJob.directPrintSettings = directPrintSettings()
+        directJob.directPrintSettings = directPrintSettings(job)
         beginOutputProgress("direct")
         if (appState.usingMultiInkPrinter) {
             console.log("Routing to the newer-model MultiInk SDK backend with inkMode =", appState.multiInkInkMode)
@@ -454,7 +467,7 @@ Item {
 
 						C.MenuItem {
 							id: miLoad
-							implicitHeight: root.theme.mobile ? 44 : implicitContentHeight
+							implicitHeight: root.theme.compactControlHeight
 							text: strings.trKey("jobs.load")
 							hoverEnabled: true
 
@@ -479,7 +492,7 @@ Item {
 
 						C.MenuItem {
 							id: miCreateFromImage
-							implicitHeight: root.theme.mobile ? 44 : implicitContentHeight
+							implicitHeight: root.theme.compactControlHeight
 							text: strings.trKey("jobs.createFromImage")
 							hoverEnabled: true
 
@@ -509,7 +522,7 @@ Item {
 
 						C.MenuItem {
 							id: miPrinter
-							implicitHeight: root.theme.mobile ? 44 : implicitContentHeight
+							implicitHeight: root.theme.compactControlHeight
 							text: strings.trKey("jobs.printerSetup")
 							hoverEnabled: true
 
@@ -538,7 +551,7 @@ Item {
 
 						C.MenuItem {
 							id: miMaintenance
-							implicitHeight: root.theme.mobile ? 44 : implicitContentHeight
+							implicitHeight: root.theme.compactControlHeight
 							text: strings.trKey("jobs.printerMaintenance")
 							enabled: nocaiDirectPrint.supportsMaintenance(appState.selectedPrinter)
 							hoverEnabled: enabled
@@ -574,7 +587,7 @@ Item {
 
 						C.MenuItem {
 							id: miColor
-							implicitHeight: root.theme.mobile ? 44 : implicitContentHeight
+							implicitHeight: root.theme.compactControlHeight
 							text: strings.trKey("jobs.colorManagement")
 							hoverEnabled: true
 
@@ -603,7 +616,7 @@ Item {
 
 						C.MenuItem {
 							id: miLanguage
-							implicitHeight: root.theme.mobile ? 44 : implicitContentHeight
+							implicitHeight: root.theme.compactControlHeight
 							text: strings.trKey("language.menu")
 							hoverEnabled: true
 
@@ -629,7 +642,7 @@ Item {
 
 						C.MenuItem {
 							id: miDarkMode
-							implicitHeight: root.theme.mobile ? 44 : implicitContentHeight
+							implicitHeight: root.theme.compactControlHeight
 							text: root.theme.dark ? strings.trKey("jobs.switchLight") : strings.trKey("jobs.switchDark")
 							hoverEnabled: true
 
@@ -958,8 +971,7 @@ Item {
 
                         if (appState.usingSimulatedPrinter) {
                             if (appState.multiInkOutputMode === "direct"
-                                    && (appState.selectedPrinter === "X-33"
-                                        || appState.selectedPrinter === "X-36NC (Photo Printer)"))
+                                    && colorManager.directPrintSdkFamilyForPrinter(appState.selectedPrinter).length > 0)
                                 printSelectedSdkJobDirectly()
                             else
                                 outputFileDialog.open()
@@ -1069,7 +1081,7 @@ Item {
 
 					// Pass current ink mode into the pipeline
 					multiInkJob.inkMode = appState.multiInkInkMode
-                    multiInkJob.directPrintSettings = directPrintSettings()
+                    multiInkJob.directPrintSettings = directPrintSettings(job)
 
 					console.log("Routing to Nocai MultiInk backend with inkMode =", appState.multiInkInkMode)
 					printJobMultiInk.runPRNGeneration(multiInkJob, outputPath)
@@ -1096,6 +1108,13 @@ Item {
 					appState.outputProgressPhase = phase
 			}
 
+            function onOutputProgressChanged(completed, total) {
+                if (appState.isGeneratingPRN) {
+                    appState.outputProgressValue = completed
+                    appState.outputProgressMaximum = total
+                }
+            }
+
 			function onPrnGenerationFinished(success) {
 				root.handlePrnFinished(success)
 			}
@@ -1108,6 +1127,13 @@ Item {
 				if (appState.isGeneratingPRN)
 					appState.outputProgressPhase = phase
 			}
+
+            function onOutputProgressChanged(completed, total) {
+                if (appState.isGeneratingPRN) {
+                    appState.outputProgressValue = completed
+                    appState.outputProgressMaximum = total
+                }
+            }
 
 			function onPrnGenerationFinished(success) {
 				root.handlePrnFinished(success)
@@ -1249,12 +1275,38 @@ Item {
 			}
 
             Text {
+                id: outputProgressLabel
                 text: root.outputProgressText()
                 anchors.top: parent.verticalCenter
                 anchors.horizontalCenter: parent.horizontalCenter
 				color: theme.subtext
                 font.pixelSize: 18
                 anchors.topMargin: 80
+            }
+
+            ProgressBar {
+                id: outputProgressBar
+                anchors.top: outputProgressLabel.bottom
+                anchors.topMargin: 14
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(parent.width - 64, 360)
+                from: 0
+                to: Math.max(1, appState.outputProgressMaximum)
+                value: appState.outputProgressValue
+                indeterminate: appState.outputProgressMaximum <= 0
+            }
+
+            ThemedButton {
+                anchors.top: outputProgressBar.bottom
+                anchors.topMargin: 14
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: strings.trKey("jobs.progress.cancelOutput")
+                theme: root.theme
+                onClicked: {
+                    printJobCMYK.cancelOutput()
+                    printJobMultiInk.cancelOutput()
+                    nocaiDirectPrint.cancelCurrentOutput()
+                }
             }
         }
     }

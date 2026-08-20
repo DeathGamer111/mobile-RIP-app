@@ -77,12 +77,13 @@ bool ImageEditor::drawRectangle(int x, int y, int width, int height) { Q_UNUSED(
 bool ImageEditor::undo() { return unavailable("Undo"); }
 bool ImageEditor::redo() { return unavailable("Redo"); }
 void ImageEditor::clearUndoRedoStacks() {}
-bool ImageEditor::applyImpositionEdits(const QString& imagePath, int offsetX, int offsetY, QSize paperSize, const QVariantMap& overlayData)
+bool ImageEditor::applyImpositionEdits(const QString& imagePath, int offsetX, int offsetY, QSize paperSize, const QVariantMap& overlayData, double fallbackInputDpi)
 {
     Q_UNUSED(imagePath)
     Q_UNUSED(offsetX)
     Q_UNUSED(offsetY)
     Q_UNUSED(paperSize)
     Q_UNUSED(overlayData)
+    Q_UNUSED(fallbackInputDpi)
     return unavailable("Imposition edits");
 }

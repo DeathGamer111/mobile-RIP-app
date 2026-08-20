@@ -66,6 +66,14 @@ public:
     const Lut8& lutW() const { return m_w; }
     const Lut8& lutV() const { return m_v; }
 
+    // Apply the shared dark-ink CMYK curves used by four-color output. This
+    // is also the complete color set for the legacy X-33 pipeline.
+    bool applyFourColorTones(
+        std::array<std::vector<uint8_t>, 4>& tones) const;
+
+    // W remains identity when the selected XML has no White separation.
+    bool applyWhiteTone(std::vector<uint8_t>& tone) const;
+
 private:
     static Lut8 makeLinearLut();
 

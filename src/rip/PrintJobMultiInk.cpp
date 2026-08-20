@@ -1,4 +1,6 @@
 #include "PrintJobMultiInk.h"
+#include "BoundedRasterPipeline.h"
+#include "ImagePhysicalSize.h"
 #include "NocaiPrnWriter.h"
 
 #include <QDateTime>
@@ -6,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QScopeGuard>
 #include <QUrl>
 #include <QtConcurrent>
 
@@ -270,23 +273,26 @@ int PrintJobMultiInk::inkMode() const
 
 void PrintJobMultiInk::runPRNGeneration(const QVariantMap& jobMap, const QString& outputPath)
 {
+    m_cancelRequested.store(false, std::memory_order_relaxed);
     (void)QtConcurrent::run([=]() {
-        emit outputPhaseChanged(QStringLiteral("rasterizing"));
+        emit outputPhaseChanged(QStringLiteral("preprocessing"));
         bool success = false;
-        if (const_cast<PrintJobMultiInk*>(this)->prepareJobForOutput(jobMap, outputPath)) {
-            RasterPayload payload;
+        DirectPrintSpool spool;
+        if (const_cast<PrintJobMultiInk*>(this)->prepareJobForOutput(
+                jobMap, outputPath, true)) {
             const QSize resolution = jobMap.value("resolution").toSize();
-            success = const_cast<PrintJobMultiInk*>(this)->buildRasterPayload(
+            success = const_cast<PrintJobMultiInk*>(this)->buildRasterSpool(
                 resolution.width(),
                 resolution.height(),
-                payload);
+                spool,
+                true);
 
             if (success) {
                 emit outputPhaseChanged(QStringLiteral("generatingPrn"));
-                success = const_cast<PrintJobMultiInk*>(this)->writePRNFile(payload, outputPath);
+                success = const_cast<PrintJobMultiInk*>(this)->writePRNFile(spool, outputPath);
             }
         }
-
+        PrintFlowRasterSpool::remove(spool);
         emit prnGenerationFinished(success);
     });
 }
@@ -294,25 +300,32 @@ void PrintJobMultiInk::runPRNGeneration(const QVariantMap& jobMap, const QString
 
 void PrintJobMultiInk::runDirectPrint(const QVariantMap& jobMap)
 {
+    m_cancelRequested.store(false, std::memory_order_relaxed);
     (void)QtConcurrent::run([=]() {
-        emit outputPhaseChanged(QStringLiteral("rasterizing"));
+        emit outputPhaseChanged(QStringLiteral("preprocessing"));
         bool success = false;
-        if (const_cast<PrintJobMultiInk*>(this)->prepareJobForOutput(jobMap, QStringLiteral("(direct print)"))) {
-            RasterPayload payload;
+        DirectPrintSpool spool;
+        if (const_cast<PrintJobMultiInk*>(this)->prepareJobForOutput(
+                jobMap, QStringLiteral("(direct print)"), false)) {
             const QSize resolution = jobMap.value("resolution").toSize();
-            success = const_cast<PrintJobMultiInk*>(this)->buildRasterPayload(
+            success = const_cast<PrintJobMultiInk*>(this)->buildRasterSpool(
                 resolution.width(),
                 resolution.height(),
-                payload);
+                spool);
 
             if (success) {
                 emit outputPhaseChanged(QStringLiteral("printing"));
-                success = const_cast<PrintJobMultiInk*>(this)->sendDirectPrint(payload, jobMap);
+                success = const_cast<PrintJobMultiInk*>(this)->sendDirectPrint(spool, jobMap);
             }
         }
-
+        PrintFlowRasterSpool::remove(spool);
         emit prnGenerationFinished(success);
     });
+}
+
+void PrintJobMultiInk::cancelOutput()
+{
+    m_cancelRequested.store(true, std::memory_order_relaxed);
 }
 
 
@@ -321,8 +334,11 @@ void PrintJobMultiInk::runDirectPrint(const QVariantMap& jobMap)
 // Input loading / raw asset helpers
 // -----------------------------------------------------------------------------
 
-bool PrintJobMultiInk::prepareJobForOutput(const QVariantMap& jobMap, const QString& outputPathForLogging)
+bool PrintJobMultiInk::prepareJobForOutput(
+    const QVariantMap& jobMap, const QString& outputPathForLogging,
+    bool includeFinalPrn)
 {
+    BoundedRasterPipeline::configureImageMagickCache();
     bool success = false;
 
     if (!prepareAssets()) {
@@ -484,7 +500,47 @@ bool PrintJobMultiInk::prepareJobForOutput(const QVariantMap& jobMap, const QStr
                           dotStrategy,
                           m_modeParams);
 
-    if (!loadInputImage(imagePath))
+    const int preflightXDpi = std::clamp(resolution.width(), 1, kBaseXDpi);
+    const int preflightYDpi = snapToMultiple(resolution.height(), kBaseYDpi);
+    const QString localImagePath = imagePath.startsWith("file:", Qt::CaseInsensitive)
+        ? QUrl(imagePath).toLocalFile() : imagePath;
+    BoundedRasterPipeline::SourceInfo sourceInfo;
+    QString storageError;
+    if (!BoundedRasterPipeline::inspectSource(
+            localImagePath, preflightXDpi, preflightYDpi,
+            kBaseYDpi, kBaseYDpi, &sourceInfo, &storageError)) {
+        qWarning().noquote() << "PrintJobMultiInk:" << storageError;
+        return false;
+    }
+    const QSize preflightOutputSize = ImagePhysicalSize::outputPixelSize(
+        size_t(sourceInfo.width), size_t(sourceInfo.height),
+        {sourceInfo.xDpi, sourceInfo.yDpi, true},
+        preflightXDpi, preflightYDpi);
+    QStringList maskPaths;
+    for (int channel = 0; channel < modeInt; ++channel) {
+        maskPaths.append(m_assetManager.assetPath(
+            QString("mask_512_%1.tiff")
+                .arg(maskKeyForChannel(m_inkMode, channel))));
+    }
+    quint64 maskCacheBytes = 0;
+    const int externalPlateCaches =
+        (std::clamp(m_modeParams.value("whiteMode", 0).toInt(), 0, 3) == 3 ? 1 : 0) +
+        (std::clamp(m_modeParams.value("varnishMode", 0).toInt(), 0, 3) == 3 ? 1 : 0);
+    if (!preflightOutputSize.isValid()
+        || !BoundedRasterPipeline::estimateMaskCacheStorage(
+            maskPaths, &maskCacheBytes, &storageError)
+        || !BoundedRasterPipeline::preflightStorage(
+            preflightOutputSize.width(), preflightOutputSize.height(),
+            sourceInfo.width, sourceInfo.height, modeInt, modeInt,
+            includeFinalPrn, sourceInfo.hasAlpha, externalPlateCaches,
+            maskCacheBytes, &storageError)) {
+        if (storageError.isEmpty())
+            storageError = QStringLiteral("Could not resolve raster dimensions for storage preflight.");
+        qWarning().noquote() << "PrintJobMultiInk:" << storageError;
+        return false;
+    }
+
+    if (!loadInputImageForOutput(imagePath, resolution.width(), resolution.height()))
         return false;
 
     if (m_useDeviceLink) {
@@ -544,125 +600,37 @@ bool PrintJobMultiInk::prepareJobForOutput(const QVariantMap& jobMap, const QStr
 
 bool PrintJobMultiInk::loadInputImage(const QString& imagePath)
 {
+    return loadInputImageForOutput(imagePath, kBaseXDpi, kBaseYDpi);
+}
+
+
+bool PrintJobMultiInk::loadInputImageForOutput(
+    const QString& imagePath, int xdpi, int ydpi)
+{
     try {
         sourceAlphaMask.reset();
         const QString localPath = QUrl(imagePath).toLocalFile();
+        inputImage = Magick::Image();
+        ImagePhysicalSize::setVectorReadDensity(inputImage, localPath, xdpi, ydpi);
         inputImage.read(localPath.toStdString());
-        if (!sourceAlphaMask.capture(inputImage)) {
+        const ImagePhysicalSize::Density density =
+            ImagePhysicalSize::resolvedDensity(inputImage, kBaseYDpi, kBaseYDpi);
+        m_inputXDpi = density.xDpi;
+        m_inputYDpi = density.yDpi;
+        qDebug() << "PrintJobMultiInk: source density" << m_inputXDpi << "x"
+                 << m_inputYDpi << "DPI"
+                 << (density.hasPhysicalUnits ? "(file/document)" : "(600 DPI fallback)");
+        if (!sourceAlphaMask.capture(inputImage, &m_cancelRequested)) {
             qWarning() << "PrintJobMultiInk: failed to preserve the source alpha channel.";
             return false;
         }
 
-        QFileInfo fi(localPath);
-        originalFilename = fi.fileName();
-
-        tempDir = std::make_unique<QTemporaryDir>();
-        if (!tempDir->isValid()) {
-            qWarning() << "PrintJobMultiInk: failed to create temp dir";
-            return false;
-        }
-
-        tempImagePath = tempDir->filePath(originalFilename);
-        inputImage.write(tempImagePath.toStdString());
-
-        qDebug() << "PrintJobMultiInk: loaded and copied to" << tempImagePath;
+        qDebug() << "PrintJobMultiInk: loaded input image from" << localPath;
         return true;
     } catch (const Magick::Exception& e) {
         qWarning() << "PrintJobMultiInk: image load failed:" << e.what();
         return false;
     }
-}
-
-
-bool PrintJobMultiInk::loadMaskRaw(const QString& key,
-                                   std::vector<uint8_t>& maskRaw,
-                                   int& maskW,
-                                   int& maskH) const
-{
-    try {
-        const QString maskPath = m_assetManager.assetPath(QString("mask_512_%1.tiff").arg(key));
-
-        Magick::Image maskImg;
-        maskImg.read(maskPath.toStdString());
-
-        maskW = static_cast<int>(maskImg.columns());
-        maskH = static_cast<int>(maskImg.rows());
-
-        if (maskW <= 0 || maskH <= 0) {
-            qWarning() << "PrintJobMultiInk: loaded mask has invalid size:"
-                       << maskPath << "w=" << maskW << "h=" << maskH;
-            return false;
-        }
-
-        maskRaw.resize(size_t(maskW) * size_t(maskH));
-        maskImg.write(0, 0, maskW, maskH, "I", Magick::CharPixel, maskRaw.data());
-        return true;
-    } catch (const Magick::Exception& e) {
-        qWarning() << "PrintJobMultiInk: failed to load mask:" << key << "err:" << e.what();
-        return false;
-    }
-}
-
-
-bool PrintJobMultiInk::loadExternalPlateTone(const QString& platePath,
-                                             std::vector<uint8_t>& outTone,
-                                             int width,
-                                             int height) const
-{
-    QString localPath = platePath;
-    if (localPath.startsWith("file:", Qt::CaseInsensitive))
-        localPath = QUrl(localPath).toLocalFile();
-
-    if (localPath.trimmed().isEmpty() || !QFileInfo::exists(localPath)) {
-        qWarning() << "PrintJobMultiInk: external plate not found:" << platePath;
-        return false;
-    }
-
-    try {
-        Magick::Image plate;
-        plate.read(localPath.toStdString());
-        plate.colorSpace(Magick::GRAYColorspace);
-        plate.type(Magick::GrayscaleType);
-
-        if (static_cast<int>(plate.columns()) != width ||
-            static_cast<int>(plate.rows()) != height) {
-            const QString geom = QString("%1x%2!").arg(width).arg(height);
-            plate.resize(Magick::Geometry(geom.toStdString()));
-        }
-
-        outTone.resize(size_t(width) * size_t(height));
-        plate.write(0, 0, width, height, "I", Magick::CharPixel, outTone.data());
-        return true;
-    } catch (const Magick::Exception& e) {
-        qWarning() << "PrintJobMultiInk: failed to load external plate:"
-                   << platePath << "err:" << e.what();
-        return false;
-    }
-}
-
-
-std::array<Magick::Image, 4> PrintJobMultiInk::separateCMYK(Magick::Image& cmykImage)
-{
-    std::array<Magick::Image, 4> channels;
-
-    const int width = static_cast<int>(cmykImage.columns());
-    const int height = static_cast<int>(cmykImage.rows());
-
-    std::vector<unsigned char> rawCMYK(width * height * 4);
-    cmykImage.write(0, 0, width, height, "CMYK", Magick::CharPixel, rawCMYK.data());
-
-    for (int ch = 0; ch < 4; ++ch) {
-        std::vector<unsigned char> channelData(width * height);
-        for (int i = 0; i < width * height; ++i)
-            channelData[i] = rawCMYK[i * 4 + ch];
-
-        channels[ch] = Magick::Image(Magick::Geometry(width, height), "white");
-        channels[ch].depth(8);
-        channels[ch].type(Magick::GrayscaleType);
-        channels[ch].read(width, height, "I", Magick::CharPixel, channelData.data());
-    }
-
-    return channels;
 }
 
 
@@ -1008,35 +976,76 @@ bool PrintJobMultiInk::reloadLinearizationFromManager()
 
 bool PrintJobMultiInk::generateFinalPRN(const QString& outputPath, int xdpi, int ydpi)
 {
-    RasterPayload payload;
-    if (!buildRasterPayload(xdpi, ydpi, payload))
-        return false;
-
-    return writePRNFile(payload, outputPath);
+    m_cancelRequested.store(false, std::memory_order_relaxed);
+    DirectPrintSpool spool;
+    const bool ok = buildRasterSpool(xdpi, ydpi, spool, true) &&
+                    writePRNFile(spool, outputPath);
+    PrintFlowRasterSpool::remove(spool);
+    return ok;
 }
 
 
-bool PrintJobMultiInk::buildRasterPayload(int xdpi, int ydpi, RasterPayload& payload)
+bool PrintJobMultiInk::buildRasterSpool(
+    int xdpi, int ydpi, DirectPrintSpool& spool, bool includeFinalPrn)
 {
     try {
         if (inputImage.colorSpace() != Magick::CMYKColorspace) {
             qWarning() << "PrintJobMultiInk: input not CMYK after ICC conversion.";
             return false;
         }
-
         xdpi = std::clamp(xdpi, 1, kBaseXDpi);
         ydpi = snapToMultiple(ydpi, kBaseYDpi);
+        const QSize outputSize = ImagePhysicalSize::outputPixelSize(
+            inputImage.columns(), inputImage.rows(),
+            {m_inputXDpi, m_inputYDpi, true}, xdpi, ydpi);
+        if (!outputSize.isValid()) {
+            qWarning() << "PrintJobMultiInk: could not resolve output raster dimensions.";
+            return false;
+        }
 
-        const double scaleX = static_cast<double>(xdpi) / double(kBaseYDpi);
-        const double scaleY = static_cast<double>(ydpi) / double(kBaseYDpi);
+        std::vector<int> channelOrder;
+        switch (m_inkMode) {
+        case InkMode::FourColor_YMCK: channelOrder = {2, 1, 0, 3}; break;
+        case InkMode::FiveColor_YMCK_W: channelOrder = {2, 1, 0, 3, 4}; break;
+        case InkMode::SixColor_YMCK_Lm_Lc: channelOrder = {2, 1, 0, 3, 4, 5}; break;
+        case InkMode::SevenColor_YMCK_Lm_Lc_W: channelOrder = {2, 1, 0, 3, 4, 5, 6}; break;
+        case InkMode::EightColor_YMCK_Lm_Lc_Lk_LLk: channelOrder = {2, 1, 0, 3, 5, 4, 6, 7}; break;
+        case InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V: channelOrder = {2, 1, 0, 3, 5, 4, 6, 7, 8, 9}; break;
+        }
+        const int logicalChannels = static_cast<int>(m_inkMode);
+        QString error;
+        const int externalPlateCaches =
+            (std::clamp(m_modeParams.value("whiteMode", 0).toInt(), 0, 3) == 3 ? 1 : 0) +
+            (std::clamp(m_modeParams.value("varnishMode", 0).toInt(), 0, 3) == 3 ? 1 : 0);
+        QStringList maskPaths;
+        for (int channel = 0; channel < logicalChannels; ++channel) {
+            maskPaths.append(m_assetManager.assetPath(
+                QString("mask_512_%1.tiff")
+                    .arg(maskKeyForChannel(m_inkMode, channel))));
+        }
+        quint64 maskCacheBytes = 0;
+        if (!BoundedRasterPipeline::estimateMaskCacheStorage(
+                maskPaths, &maskCacheBytes, &error)) {
+            qWarning().noquote() << "PrintJobMultiInk:" << error;
+            return false;
+        }
+        if (!BoundedRasterPipeline::preflightStorage(
+                outputSize.width(), outputSize.height(),
+                static_cast<int>(inputImage.columns()),
+                static_cast<int>(inputImage.rows()), logicalChannels,
+                int(channelOrder.size()), includeFinalPrn,
+                sourceAlphaMask.isActive(), externalPlateCaches,
+                maskCacheBytes, &error)) {
+            qWarning().noquote() << "PrintJobMultiInk:" << error;
+            return false;
+        }
 
-        if (scaleX != 1.0 || scaleY != 1.0) {
-            const int newWidth = int(std::lround(inputImage.columns() * scaleX));
-            const int newHeight = int(std::lround(inputImage.rows() * scaleY));
-            const QString geom = QString("%1x%2!").arg(newWidth).arg(newHeight);
-
-            inputImage.resize(Magick::Geometry(geom.toStdString()));
-            if (!sourceAlphaMask.resize(newWidth, newHeight)) {
+        if (outputSize.width() != static_cast<int>(inputImage.columns()) ||
+            outputSize.height() != static_cast<int>(inputImage.rows())) {
+            const QString geometry = QString("%1x%2!")
+                .arg(outputSize.width()).arg(outputSize.height());
+            inputImage.resize(Magick::Geometry(geometry.toStdString()));
+            if (!sourceAlphaMask.resize(outputSize.width(), outputSize.height())) {
                 qWarning() << "PrintJobMultiInk: failed to resize the source alpha mask.";
                 return false;
             }
@@ -1044,233 +1053,203 @@ bool PrintJobMultiInk::buildRasterPayload(int xdpi, int ydpi, RasterPayload& pay
                      << inputImage.columns() << "x" << inputImage.rows()
                      << "for DPI" << xdpi << "x" << ydpi;
         }
+        const int width = static_cast<int>(inputImage.columns());
+        const int height = static_cast<int>(inputImage.rows());
 
-        auto cmykChannels = separateCMYK(inputImage);
-        const int width = static_cast<int>(cmykChannels[0].columns());
-        const int height = static_cast<int>(cmykChannels[0].rows());
+        BoundedRasterPipeline::CanonicalCmykFile canonical;
+        emit outputPhaseChanged(QStringLiteral("preprocessing"));
+        if (!canonical.create(
+                inputImage, sourceAlphaMask,
+                BoundedRasterPipeline::scratchDirectory(), &m_cancelRequested,
+                [this](qint64 completed, qint64 total) {
+                    emit outputProgressChanged(completed, total);
+                }, &error)) {
+            qWarning().noquote() << "PrintJobMultiInk:" << error;
+            return false;
+        }
 
-        for (Magick::Image& channel : cmykChannels) {
-            if (!sourceAlphaMask.applyTo(channel)) {
-                qWarning() << "PrintJobMultiInk: source alpha mask does not match the CMYK raster.";
-                return false;
+        auto preparePlate = [&](const QString& sourcePath)
+            -> std::unique_ptr<Magick::Image> {
+            QString path = sourcePath.trimmed();
+            if (path.startsWith("file:", Qt::CaseInsensitive))
+                path = QUrl(path).toLocalFile();
+            if (path.isEmpty() || !QFileInfo::exists(path))
+                return {};
+            auto plate = std::make_unique<Magick::Image>();
+            plate->read(path.toStdString());
+            plate->colorSpace(Magick::GRAYColorspace);
+            plate->type(Magick::GrayscaleType);
+            if (static_cast<int>(plate->columns()) != width ||
+                static_cast<int>(plate->rows()) != height) {
+                plate->resize(Magick::Geometry(
+                    QString("%1x%2!").arg(width).arg(height).toStdString()));
             }
-        }
+            return plate;
+        };
+        std::unique_ptr<Magick::Image> whitePlate;
+        std::unique_ptr<Magick::Image> varnishPlate;
+        if (std::clamp(m_modeParams.value("whiteMode", 0).toInt(), 0, 3) == 3)
+            whitePlate = preparePlate(m_whitePlatePath);
+        if (std::clamp(m_modeParams.value("varnishMode", 0).toInt(), 0, 3) == 3)
+            varnishPlate = preparePlate(m_varnishPlatePath);
 
-		std::vector<std::vector<uint8_t>> toneChannels;
-
-        MultiInkToneBuilder::BuildRequest toneReq;
-        toneReq.cmykImages = &cmykChannels;
-        toneReq.mode = static_cast<MultiInkToneBuilder::InkMode>(static_cast<int>(m_inkMode));
-        toneReq.modeParams = m_modeParams;
-        toneReq.whitePlatePath = m_whitePlatePath;
-        toneReq.varnishPlatePath = m_varnishPlatePath;
-        toneReq.linearization = &m_linearization;
-		toneReq.enableLinearization = m_enableLinearization;
-
-        const bool built = MultiInkToneBuilder::buildToneChannels(
-            toneReq,
-            toneChannels,
-            [this](const QString& platePath, std::vector<uint8_t>& outTone, int w, int h) {
-                return this->loadExternalPlateTone(platePath, outTone, w, h);
-            });
-
-        if (!built) {
-            qWarning() << "PrintJobMultiInk: failed to build tone channels.";
-            return false;
-        }
-        
-		// applyLinearizationToToneChannels(toneChannels);
-
-        const int numChannels = static_cast<int>(toneChannels.size());
-        if (numChannels == 0) {
-            qWarning() << "PrintJobMultiInk: no channels produced for ink mode.";
+        spool = {};
+        spool.channelOrder = channelOrder;
+        spool.logicalChannelCount = logicalChannels;
+        spool.width = width;
+        spool.height = height;
+        spool.xdpi = xdpi;
+        spool.ydpi = ydpi;
+        spool.bytesPerLine = (((width + 3) / 4) + 3) & ~3;
+        spool.format = DirectPrintRasterFormat::NocaiMultiInk;
+        PrintFlowRasterSpool::Writer writer;
+        if (!writer.create(BoundedRasterPipeline::scratchDirectory(), spool, &error)) {
+            qWarning().noquote() << "PrintJobMultiInk:" << error;
             return false;
         }
 
-        const bool modeHasWhite =
-            (m_inkMode == InkMode::FiveColor_YMCK_W ||
-             m_inkMode == InkMode::SevenColor_YMCK_Lm_Lc_W ||
-             m_inkMode == InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V);
-
-        const bool modeHasVarnish =
-            (m_inkMode == InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V);
-
-        const bool whiteUseOwnDots =
-            m_modeParams.value("whiteUseOwnDotStrategy", false).toBool();
-        const int whiteSmallDot =
-            std::clamp(m_modeParams.value("whiteSmallDotThreshold", 104).toInt(), 0, 255);
-        const int whiteMedDot =
-            std::clamp(m_modeParams.value("whiteMedDotThreshold", 168).toInt(), 0, 255);
-        const bool whitePromo =
-            m_modeParams.value("whiteEnablePromotion", false).toBool();
-
-        const bool varnishUseOwnDots =
-            m_modeParams.value("varnishUseOwnDotStrategy", false).toBool();
-        const int varnishSmallDot =
-            std::clamp(m_modeParams.value("varnishSmallDotThreshold", 104).toInt(), 0, 255);
-        const int varnishMedDot =
-            std::clamp(m_modeParams.value("varnishMedDotThreshold", 168).toInt(), 0, 255);
-        const bool varnishPromo =
-            m_modeParams.value("varnishEnablePromotion", false).toBool();
-
-        auto isLightInkChannel = [&](int chIdx) -> bool {
+        const bool lightOverride = m_modeParams.value(
+            "useLightInkMinThresholdOverride", false).toBool();
+        const int lightMinimum = std::clamp(
+            m_modeParams.value("lightInkMinThreshold", 2).toInt(), 0, 254);
+        auto isLightChannel = [&](int channel) {
             if (m_inkMode == InkMode::SixColor_YMCK_Lm_Lc ||
-                m_inkMode == InkMode::SevenColor_YMCK_Lm_Lc_W) {
-                return (chIdx == 4 || chIdx == 5);
-            }
+                m_inkMode == InkMode::SevenColor_YMCK_Lm_Lc_W)
+                return channel == 4 || channel == 5;
             if (m_inkMode == InkMode::EightColor_YMCK_Lm_Lc_Lk_LLk ||
-                m_inkMode == InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V) {
-                return (chIdx == 4 || chIdx == 5 || chIdx == 6 || chIdx == 7);
-            }
+                m_inkMode == InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V)
+                return channel >= 4 && channel <= 7;
             return false;
         };
+        auto isWhiteChannel = [&](int channel) {
+            return (m_inkMode == InkMode::FiveColor_YMCK_W && channel == 4) ||
+                   (m_inkMode == InkMode::SevenColor_YMCK_Lm_Lc_W && channel == 6) ||
+                   (m_inkMode == InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V && channel == 8);
+        };
+        auto isVarnishChannel = [&](int channel) {
+            return m_inkMode == InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V && channel == 9;
+        };
 
-        MultiInkScreenEngine::ScreenRequest screenReq;
-        screenReq.width = width;
-        screenReq.height = height;
-        screenReq.screenSeed = screenSeed;
-        screenReq.modeParams = m_modeParams;
-        screenReq.dotStrategy = dotStrategy;
-
-        screenReq.channels.reserve(numChannels);
-        for (int ch = 0; ch < numChannels; ++ch) {
-            MultiInkScreenEngine::ChannelRequest creq;
-            creq.maskKey = maskKeyForChannel(m_inkMode, ch);
-            creq.toneBytes = &toneChannels[ch];
-            creq.isLightInk = isLightInkChannel(ch);
-
-            const bool isWhiteChannel =
-                modeHasWhite &&
-                ((m_inkMode == InkMode::FiveColor_YMCK_W && ch == 4) ||
-                 (m_inkMode == InkMode::SevenColor_YMCK_Lm_Lc_W && ch == 6) ||
-                 (m_inkMode == InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V && ch == 8));
-
-            const bool isVarnishChannel =
-                modeHasVarnish &&
-                (m_inkMode == InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V && ch == 9);
-
-            if (isWhiteChannel && whiteUseOwnDots) {
-                creq.useOwnDotStrategy = true;
-                creq.ownSmallDotThreshold = whiteSmallDot;
-                creq.ownMedDotThreshold = whiteMedDot;
-                creq.ownEnablePromotion = whitePromo;
+        std::vector<BoundedRasterPipeline::ScreenChannel> screenChannels;
+        screenChannels.reserve(logicalChannels);
+        for (int channel = 0; channel < logicalChannels; ++channel) {
+            const QString maskKey = maskKeyForChannel(m_inkMode, channel);
+            const bool kLike = maskKey == "k" || maskKey == "lk" ||
+                               maskKey == "llk" || maskKey == "w" || maskKey == "v";
+            BoundedRasterPipeline::ScreenChannel request;
+            request.maskPath = m_assetManager.assetPath(
+                QString("mask_512_%1.tiff").arg(maskKey));
+            request.minInkThreshold = lightOverride && isLightChannel(channel)
+                ? lightMinimum : dotStrategy.minInkThreshold;
+            request.smallDotThreshold = dotStrategy.smallDotThreshold;
+            request.medDotThreshold = dotStrategy.medDotThreshold;
+            request.enablePromotion = dotStrategy.enablePromotion;
+            if (isWhiteChannel(channel) &&
+                m_modeParams.value("whiteUseOwnDotStrategy", false).toBool()) {
+                request.smallDotThreshold = std::clamp(
+                    m_modeParams.value("whiteSmallDotThreshold", 104).toInt(), 0, 255);
+                request.medDotThreshold = std::clamp(
+                    m_modeParams.value("whiteMedDotThreshold", 168).toInt(), 0, 255);
+                request.enablePromotion = m_modeParams.value(
+                    "whiteEnablePromotion", false).toBool();
             }
-
-            if (isVarnishChannel && varnishUseOwnDots) {
-                creq.useOwnDotStrategy = true;
-                creq.ownSmallDotThreshold = varnishSmallDot;
-                creq.ownMedDotThreshold = varnishMedDot;
-                creq.ownEnablePromotion = varnishPromo;
+            if (isVarnishChannel(channel) &&
+                m_modeParams.value("varnishUseOwnDotStrategy", false).toBool()) {
+                request.smallDotThreshold = std::clamp(
+                    m_modeParams.value("varnishSmallDotThreshold", 104).toInt(), 0, 255);
+                request.medDotThreshold = std::clamp(
+                    m_modeParams.value("varnishMedDotThreshold", 168).toInt(), 0, 255);
+                request.enablePromotion = m_modeParams.value(
+                    "varnishEnablePromotion", false).toBool();
             }
-
-            screenReq.channels.push_back(creq);
+            request.floorRange = kLike ? dotStrategy.floorRangeK : dotStrategy.floorRangeCMY;
+            request.floorMax = kLike ? dotStrategy.floorMaxK : dotStrategy.floorMaxCMY;
+            request.enableDotSwap = dotStrategy.enableDotSwap;
+            request.useEffectiveTone = true;
+            screenChannels.push_back(std::move(request));
         }
 
-        std::vector<std::vector<std::vector<uint8_t>>> allPacked;
-        const bool screened = MultiInkScreenEngine::screenChannels(
-            screenReq,
-            [this](const QString& key, std::vector<uint8_t>& maskRaw, int& maskW, int& maskH) {
-                return this->loadMaskRaw(key, maskRaw, maskW, maskH);
-            },
-            allPacked);
+        emit outputPhaseChanged(QStringLiteral("rasterizing"));
+        const auto toneProvider = [&](int firstRow, int rowCount,
+                                      std::vector<std::vector<uint8_t>>& tones,
+                                      QString* providerError) -> bool {
+            std::vector<uint8_t> raw;
+            if (!canonical.readRows(firstRow, rowCount, raw, providerError))
+                return false;
+            const size_t pixels = static_cast<size_t>(width) * rowCount;
+            std::array<std::vector<uint8_t>, 4> separated;
+            for (auto& channel : separated)
+                channel.resize(pixels);
+            for (size_t pixel = 0; pixel < pixels; ++pixel)
+                for (int channel = 0; channel < 4; ++channel)
+                    separated[channel][pixel] = raw[pixel * 4ULL + size_t(channel)];
+            std::array<Magick::Image, 4> images;
+            for (int channel = 0; channel < 4; ++channel) {
+                images[channel] = Magick::Image(
+                    Magick::Geometry(width, rowCount), "white");
+                images[channel].depth(8);
+                images[channel].type(Magick::GrayscaleType);
+                images[channel].read(width, rowCount, "I", Magick::CharPixel,
+                                     separated[channel].data());
+            }
+            MultiInkToneBuilder::BuildRequest request;
+            request.cmykImages = &images;
+            request.mode = static_cast<MultiInkToneBuilder::InkMode>(
+                static_cast<int>(m_inkMode));
+            request.modeParams = m_modeParams;
+            request.whitePlatePath = m_whitePlatePath;
+            request.varnishPlatePath = m_varnishPlatePath;
+            request.linearization = &m_linearization;
+            request.enableLinearization = m_enableLinearization;
+            request.logConfiguration = firstRow == 0;
+            return MultiInkToneBuilder::buildToneChannels(
+                request, tones,
+                [&](const QString& platePath, std::vector<uint8_t>& plate,
+                    int plateWidth, int plateHeight) {
+                    Magick::Image* source = platePath == m_whitePlatePath
+                        ? whitePlate.get() : varnishPlate.get();
+                    if (!source || plateWidth != width || plateHeight != rowCount)
+                        return false;
+                    plate.resize(pixels);
+                    source->write(0, firstRow, width, rowCount,
+                                  "I", Magick::CharPixel, plate.data());
+                    return true;
+                });
+        };
 
-        if (!screened) {
-            qWarning() << "PrintJobMultiInk: screening failed.";
+        if (!BoundedRasterPipeline::screenToSpool(
+                width, height, screenSeed, m_modeParams, screenChannels,
+                toneProvider, writer, &m_cancelRequested,
+                [this](qint64 completed, qint64 total) {
+                    emit outputProgressChanged(completed, total);
+                }, &error)) {
+            qWarning().noquote() << "PrintJobMultiInk:" << error;
             return false;
         }
-
-        std::vector<int> channelOrder;
-        switch (m_inkMode) {
-        case InkMode::FourColor_YMCK:
-            channelOrder = {2, 1, 0, 3};
-            break;
-        case InkMode::FiveColor_YMCK_W:
-            channelOrder = {2, 1, 0, 3, 4};
-            break;
-        case InkMode::SixColor_YMCK_Lm_Lc:
-            channelOrder = {2, 1, 0, 3, 4, 5};
-            break;
-        case InkMode::SevenColor_YMCK_Lm_Lc_W:
-            channelOrder = {2, 1, 0, 3, 4, 5, 6};
-            break;
-        case InkMode::EightColor_YMCK_Lm_Lc_Lk_LLk:
-            channelOrder = {2, 1, 0, 3, 5, 4, 6, 7};
-            break;
-        case InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V:
-            channelOrder = {2, 1, 0, 3, 5, 4, 6, 7, 8, 9};
-            break;
-        default:
-            qWarning() << "PrintJobMultiInk: unexpected mode in channel order.";
+        emit outputPhaseChanged(QStringLiteral("spooling"));
+        if (!writer.finalize(
+                &spool, &error,
+                [this]() {
+                    return m_cancelRequested.load(std::memory_order_relaxed);
+                })) {
+            qWarning().noquote() << "PrintJobMultiInk:" << error;
             return false;
         }
-
-        payload.packedLines = std::move(allPacked);
-        payload.channelOrder = std::move(channelOrder);
-        payload.width = width;
-        payload.height = height;
-        payload.xdpi = xdpi;
-        payload.ydpi = ydpi;
-        payload.bytesPerLine = payload.packedLines.empty() || payload.packedLines[0].empty()
-            ? 0
-            : static_cast<int>(payload.packedLines[0][0].size());
-
-        return applySpecialtyBlanking(payload);
-
-    } catch (const Magick::Exception& e) {
-        qWarning() << "PrintJobMultiInk: raster payload generation failed:" << e.what();
+        return true;
+    } catch (const Magick::Exception& error) {
+        qWarning() << "PrintJobMultiInk: bounded raster generation failed:"
+                   << error.what();
+        return false;
+    } catch (const std::bad_alloc&) {
+        qWarning() << "PrintJobMultiInk: bounded raster allocation failed.";
         return false;
     }
 }
 
 
-bool PrintJobMultiInk::applySpecialtyBlanking(RasterPayload& payload) const
-{
-    if (payload.packedLines.empty() || payload.packedLines[0].empty()) {
-        qWarning() << "PrintJobMultiInk: packedLines empty.";
-        return false;
-    }
-
-    const int whiteMode = std::clamp(m_modeParams.value("whiteMode", 0).toInt(), 0, 3);
-    const int varnishMode = std::clamp(m_modeParams.value("varnishMode", 0).toInt(), 0, 3);
-
-    const bool whiteEnabled = (whiteMode != static_cast<int>(SpecialtyMode::Off));
-    const bool varnishEnabled = (varnishMode != static_cast<int>(SpecialtyMode::Off));
-
-    std::vector<uint8_t> blankRow(static_cast<size_t>(payload.bytesPerLine), 0);
-
-    auto isWhiteChannel = [&](int ch) -> bool {
-        switch (m_inkMode) {
-        case InkMode::FiveColor_YMCK_W:
-            return (ch == 4);
-        case InkMode::SevenColor_YMCK_Lm_Lc_W:
-            return (ch == 6);
-        case InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V:
-            return (ch == 8);
-        default:
-            return false;
-        }
-    };
-
-    auto isVarnishChannel = [&](int ch) -> bool {
-        return (m_inkMode == InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V && ch == 9);
-    };
-
-    for (int row = 0; row < payload.height; ++row) {
-        for (int ch : payload.channelOrder) {
-            const bool forceBlank =
-                (isWhiteChannel(ch) && !whiteEnabled) ||
-                (isVarnishChannel(ch) && !varnishEnabled);
-
-            if (forceBlank)
-                payload.packedLines[ch][row] = blankRow;
-        }
-    }
-
-    return true;
-}
 
 
-bool PrintJobMultiInk::writePRNFile(const RasterPayload& payload,
+bool PrintJobMultiInk::writePRNFile(const DirectPrintSpool& spool,
                                     const QString& outputPath)
 {
     NocaiPrnWriter::MultiInkMode writerMode;
@@ -1298,37 +1277,34 @@ bool PrintJobMultiInk::writePRNFile(const RasterPayload& payload,
         return false;
     }
 
-    return NocaiPrnWriter::writeMultiInkPrn(
-        payload.packedLines,
-        payload.channelOrder,
-        writerMode,
-        payload.width,
-        payload.height,
-        payload.xdpi,
-        payload.ydpi,
-        payload.bytesPerLine,
-        outputPath);
+    return NocaiPrnWriter::writeMultiInkPrn(spool, writerMode, outputPath);
 }
 
 
-bool PrintJobMultiInk::sendDirectPrint(const RasterPayload& payload, const QVariantMap& jobMap)
+bool PrintJobMultiInk::sendDirectPrint(const DirectPrintSpool& spool, const QVariantMap& jobMap)
 {
     if (!m_directPrintClient) {
         qWarning() << "PrintJobMultiInk: direct print client is not attached.";
         return false;
     }
 
-    DirectPrintRaster raster;
-    raster.packedLines = &payload.packedLines;
-    raster.channelOrder = payload.channelOrder;
-    raster.width = payload.width;
-    raster.height = payload.height;
-    raster.xdpi = payload.xdpi;
-    raster.ydpi = payload.ydpi;
-    raster.bytesPerLine = payload.bytesPerLine;
-
-    const DirectPrintSettings settings = directPrintSettingsFromJob(jobMap, payload);
-    const bool ok = m_directPrintClient->submitPreparedJob(raster, settings);
+    auto* spooledClient = dynamic_cast<ISpooledPrintOutputClient*>(m_directPrintClient);
+    if (!spooledClient) {
+        qWarning() << "PrintJobMultiInk: direct print client does not support bounded raster spools.";
+        return false;
+    }
+    spooledClient->setSpoolProgressCallback(
+        [this](const QString& phase, qint64 completed, qint64 total) {
+            emit outputPhaseChanged(phase);
+            emit outputProgressChanged(completed, total);
+        });
+    const auto clearProgress = qScopeGuard([spooledClient]() {
+        spooledClient->setSpoolProgressCallback({});
+    });
+    emit outputPhaseChanged(QStringLiteral("uploading"));
+    emit outputProgressChanged(0, 1);
+    const DirectPrintSettings settings = directPrintSettingsFromJob(jobMap, spool);
+    const bool ok = spooledClient->submitSpooledJob(spool, settings);
     if (!ok) {
         qWarning() << "PrintJobMultiInk: direct print failed:"
                    << m_directPrintClient->lastError();
@@ -1339,7 +1315,7 @@ bool PrintJobMultiInk::sendDirectPrint(const RasterPayload& payload, const QVari
 
 
 DirectPrintSettings PrintJobMultiInk::directPrintSettingsFromJob(const QVariantMap& jobMap,
-                                                                 const RasterPayload& payload) const
+                                                                 const DirectPrintSpool& spool) const
 {
     QVariantMap settings;
     if (m_colorManager)
@@ -1358,7 +1334,7 @@ DirectPrintSettings PrintJobMultiInk::directPrintSettingsFromJob(const QVariantM
     out.printDirection = value("printDirection", 0);
     out.printSpeed = value("printSpeed", 1);
     out.wcSequence = value("wcSequence", 0);
-    out.eclosionGrade = value("eclosionGrade", 0);
+    out.eclosionGrade = value("eclosionGrade", 2);
     out.headSelect = value("headSelect", 0);
     out.whiteInkPercent = value("whiteInkPercent", 0);
     out.whiteInkPassCount = value("whiteInkPassCount", 0);
@@ -1383,7 +1359,7 @@ DirectPrintSettings PrintJobMultiInk::directPrintSettingsFromJob(const QVariantM
     out.vsdMode = value("vsdMode", 0);
 
     if (out.pass <= 0)
-        out.pass = std::max(1, payload.ydpi / kBaseYDpi);
+        out.pass = std::max(1, spool.ydpi / kBaseYDpi);
 
     return out;
 }
@@ -1501,8 +1477,8 @@ bool PrintJobMultiInk::prepareAssets()
         "RIP_App_Linearization_1200_8C.xml"
     };
 
-    if (!m_assetManager.copyResourcesIfMissing(bundledResourcePaths, bundledFileNames)) {
-        qWarning() << "PrintJobMultiInk: failed to copy one or more bundled runtime assets.";
+    if (!m_assetManager.syncResources(bundledResourcePaths, bundledFileNames)) {
+        qWarning() << "PrintJobMultiInk: failed to stage one or more bundled runtime assets.";
         return false;
     }
 

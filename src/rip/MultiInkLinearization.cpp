@@ -375,3 +375,40 @@ bool MultiInkLinearization::loadTransferCurveXml(const QString& path)
     m_hasExternalCurves = true;
     return true;
 }
+
+
+bool MultiInkLinearization::applyFourColorTones(
+    std::array<std::vector<uint8_t>, 4>& tones) const
+{
+    if (!m_hasExternalCurves)
+        return false;
+
+    const size_t count = tones[0].size();
+    for (const auto& tone : tones) {
+        if (tone.size() != count)
+            return false;
+    }
+
+    const auto& cLut = lutC_Lc();
+    const auto& mLut = lutM_Lm();
+    const auto& yLut = lutY();
+    const auto& kLut = lutK_Lk_LLk();
+    for (size_t index = 0; index < count; ++index) {
+        tones[0][index] = cLut.dark[tones[0][index]];
+        tones[1][index] = mLut.dark[tones[1][index]];
+        tones[2][index] = yLut.single[tones[2][index]];
+        tones[3][index] = kLut.dark[tones[3][index]];
+    }
+    return true;
+}
+
+
+bool MultiInkLinearization::applyWhiteTone(std::vector<uint8_t>& tone) const
+{
+    if (!m_hasExternalCurves)
+        return false;
+
+    for (uint8_t& value : tone)
+        value = m_w[value];
+    return true;
+}
