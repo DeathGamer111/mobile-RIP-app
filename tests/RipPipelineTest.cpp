@@ -36,6 +36,7 @@ private slots:
     void directPrintSdkFamiliesAreSeparated();
     void selectedPrinterPersistsWhenSetupIsSaved();
     void inputDensityPreservesPhysicalSize();
+    void rasterStrategySelectsFastAndBoundedPaths();
     void stripScreeningMatchesFullFrameAtAllTestHeights();
     void stripScreeningMatchesFullFrameWithPromotionAndSwapDisabled();
     void rasterSpoolDetectsBodyCorruption();
@@ -341,6 +342,39 @@ void RipPipelineTest::selectedPrinterPersistsWhenSetupIsSaved()
     QVERIFY(reader.save());
 }
 
+void RipPipelineTest::rasterStrategySelectsFastAndBoundedPaths()
+{
+    const auto smallX33 = BoundedRasterPipeline::selectRasterStrategy(
+        1600, 1200, 4, false);
+    QCOMPARE(smallX33.strategy,
+             BoundedRasterPipeline::RasterStrategy::InMemory);
+    QVERIFY(smallX33.estimatedNativeBytes <= smallX33.nativeLimitBytes);
+
+    const auto smallMultiInk = BoundedRasterPipeline::selectRasterStrategy(
+        1600, 1200, 10, true);
+    QCOMPARE(smallMultiInk.strategy,
+             BoundedRasterPipeline::RasterStrategy::InMemory);
+
+    const auto onyxSizedX33 = BoundedRasterPipeline::selectRasterStrategy(
+        11854, 12274, 4, false);
+    QCOMPARE(onyxSizedX33.strategy,
+             BoundedRasterPipeline::RasterStrategy::InMemory);
+    QVERIFY(onyxSizedX33.estimatedNativeBytes <= onyxSizedX33.nativeLimitBytes);
+    QCOMPARE(onyxSizedX33.nativeLimitBytes, 4ULL * 1024ULL * 1024ULL * 1024ULL);
+
+    const auto onyxSizedTenInk = BoundedRasterPipeline::selectRasterStrategy(
+        11854, 12274, 10, true);
+    QCOMPARE(onyxSizedTenInk.strategy,
+             BoundedRasterPipeline::RasterStrategy::Bounded);
+    QVERIFY(onyxSizedTenInk.estimatedNativeBytes >
+            onyxSizedTenInk.nativeLimitBytes);
+
+    const auto oversizedX33 = BoundedRasterPipeline::selectRasterStrategy(
+        30000, 10000, 4, false);
+    QCOMPARE(oversizedX33.strategy,
+             BoundedRasterPipeline::RasterStrategy::Bounded);
+}
+
 void RipPipelineTest::inputDensityPreservesPhysicalSize()
 {
     const ImagePhysicalSize::Density sourceDensity {152.4, 152.4, true};
@@ -559,6 +593,7 @@ void RipPipelineTest::stripScreeningMatchesFullFrameWithPromotionAndSwapDisabled
     MultiInkScreenEngine::ChannelRequest referenceChannel;
     referenceChannel.maskKey = QStringLiteral("mask");
     referenceChannel.toneBytes = &sourceTone;
+    referenceChannel.useEffectiveTone = false;
     referenceRequest.channels.push_back(referenceChannel);
     MultiInkScreenEngine::AllPackedLines reference;
     QVERIFY(MultiInkScreenEngine::screenChannels(
@@ -577,7 +612,7 @@ void RipPipelineTest::stripScreeningMatchesFullFrameWithPromotionAndSwapDisabled
     channel.floorMax = referenceRequest.dotStrategy.floorMaxCMY;
     channel.enablePromotion = false;
     channel.enableDotSwap = false;
-    channel.useEffectiveTone = true;
+    channel.useEffectiveTone = false;
     const int bytesPerLine = ((width + 3) / 4 + 3) & ~3;
     for (const int stripRows : {1, 17, 128}) {
         DirectPrintSpool metadata;

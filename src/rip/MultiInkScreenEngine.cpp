@@ -51,6 +51,8 @@ bool MultiInkScreenEngine::screenChannels(
     const int lightMinT = std::clamp(vmInt(req.modeParams, "lightInkMinThreshold", 2), 0, 254);
 
     for (int ch = 0; ch < static_cast<int>(req.channels.size()); ++ch) {
+        if (req.canceled && req.canceled->load(std::memory_order_relaxed))
+            return false;
         const auto& channelReq = req.channels[ch];
         if (!channelReq.toneBytes) {
             qWarning() << "MultiInkScreenEngine: null tone channel at index" << ch;
@@ -88,12 +90,14 @@ bool MultiInkScreenEngine::screenChannels(
         std::vector<uint8_t> dithered(pixelCount, 0);
         std::vector<uint8_t> classMask(pixelCount, 0);
 
-        const bool isKLike =
+        const bool inferredKLike =
             (channelReq.maskKey == "k" ||
              channelReq.maskKey == "lk" ||
              channelReq.maskKey == "llk" ||
              channelReq.maskKey == "w" ||
              channelReq.maskKey == "v");
+        const bool isKLike = channelReq.floorClass < 0
+            ? inferredKLike : channelReq.floorClass > 0;
 
         const uint8_t floorRange = isKLike ? req.dotStrategy.floorRangeK : req.dotStrategy.floorRangeCMY;
         const uint8_t floorMax   = isKLike ? req.dotStrategy.floorMaxK   : req.dotStrategy.floorMaxCMY;
@@ -116,6 +120,8 @@ bool MultiInkScreenEngine::screenChannels(
         };
 
         for (int y = 0; y < req.height; ++y) {
+            if (req.canceled && req.canceled->load(std::memory_order_relaxed))
+                return false;
             int rowBase = y * req.width;
             for (int x = 0; x < req.width; ++x) {
                 int idx = rowBase + x;
@@ -139,7 +145,8 @@ bool MultiInkScreenEngine::screenChannels(
                 uint8_t t = sampleMask(x, y);
                 dithered[idx] = (uEff > t) ? 255 : 0;
                 classMask[idx] = t;
-                effTone[idx] = static_cast<uint8_t>(uEff);
+                effTone[idx] = channelReq.useEffectiveTone
+                    ? static_cast<uint8_t>(uEff) : u;
             }
         }
 
@@ -163,6 +170,8 @@ bool MultiInkScreenEngine::screenChannels(
         }
 
         allPacked[ch] = packTo2BPP(dotMap, req.width, req.height);
+        if (req.progress)
+            req.progress(ch + 1, qint64(req.channels.size()));
     }
 
     return true;

@@ -214,6 +214,13 @@ int main(int argc, char *argv[]) {
     printJobMultiInk.setDirectPrintClient(&nocaiDirectPrint);
     printJobCMYKOutput.setColorManager(&colorManager);
     printJobCMYKOutput.setDirectPrintClient(&nocaiDirectPrint);
+
+    // Stage and register both printer families before QML is loaded.  Views can
+    // then populate their profile models synchronously on their first frame,
+    // independent of StackView construction/visibility ordering.
+    printJobCMYKOutput.prepareAssets();
+    if (!printJobMultiInk.prepareAssets())
+        qWarning() << "PrintFlow: failed to prepare X-36 Studio runtime assets.";
     
     // Cap decode allocations to reduce OOM risk with very large images (MB).
     // Set to 0 to disable the guard (not recommended).

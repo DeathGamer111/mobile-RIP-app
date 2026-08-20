@@ -5,6 +5,7 @@
 #include <vector>
 #include <functional>
 #include <cstdint>
+#include <atomic>
 #include "MultiInkTypes.h"
 
 class MultiInkScreenEngine
@@ -18,6 +19,11 @@ public:
         int ownSmallDotThreshold = 104;
         int ownMedDotThreshold = 168;
         bool ownEnablePromotion = false;
+        // Multi-ink uses the normalized post-gate tone for classification;
+        // X-33 intentionally retains the original post-linearization tone.
+        bool useEffectiveTone = true;
+        // -1 infers from the mask key, 0 uses CMY floor values, 1 uses K.
+        int floorClass = -1;
     };
 
     struct ScreenRequest {
@@ -27,6 +33,8 @@ public:
         QVariantMap modeParams;
         MultiInkDotStrategy dotStrategy;
         std::vector<ChannelRequest> channels;
+        std::atomic_bool* canceled = nullptr;
+        std::function<void(qint64, qint64)> progress;
     };
 
     using MaskLoader = std::function<bool(

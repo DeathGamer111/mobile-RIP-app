@@ -55,7 +55,6 @@
   "jobs.progress.preprocessing": "Preparing Image...",
   "jobs.progress.spooling": "Validating Raster...",
   "jobs.progress.uploading": "Uploading Raster...",
-  "jobs.progress.cancelOutput": "Cancel Output",
   "jobs.progress.generatingPrn": "Generating PRN...",
   "jobs.progress.printing": "Printing...",
   "jobs.progress.preparingPrint": "Preparing Print Job...",

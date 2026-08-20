@@ -139,6 +139,8 @@ private:
     bool loadInputImageForOutput(const QString& imagePath, int xdpi, int ydpi);
     bool buildRasterSpool(int xdpi, int ydpi, DirectPrintSpool& spool,
                           bool includeFinalPrn = false);
+    bool buildInMemoryRasterSpool(int xdpi, int ydpi,
+                                  DirectPrintSpool& spool);
     bool writePRNFile(const DirectPrintSpool& spool, const QString& outputPath);
     bool sendDirectPrint(const DirectPrintSpool& spool, const QVariantMap& jobMap);
     DirectPrintSettings directPrintSettingsFromJob(const QVariantMap& jobMap,

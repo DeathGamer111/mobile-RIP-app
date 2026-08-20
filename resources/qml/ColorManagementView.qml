@@ -190,8 +190,9 @@ Page {
     }
 
     function indexOfPath(path) {
+        const requestedPath = normalizePath(path)
         for (let i = 0; i < iccProfileModel.count; ++i) {
-            if (iccProfileModel.get(i).path === path)
+            if (normalizePath(iccProfileModel.get(i).path) === requestedPath)
                 return i
         }
         return -1

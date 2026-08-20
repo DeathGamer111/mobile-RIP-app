@@ -20,7 +20,8 @@ namespace BoundedRasterPipeline {
 namespace {
 
 constexpr quint64 MiB = 1024ULL * 1024ULL;
-constexpr quint64 NativeBufferBudget = 128ULL * MiB;
+constexpr quint64 BoundedNativeBufferBudget = 128ULL * MiB;
+constexpr quint64 InMemoryRasterBudget = 4ULL * 1024ULL * MiB;
 
 void setError(QString* destination, const QString& message)
 {
@@ -34,7 +35,7 @@ bool isCanceled(std::atomic_bool* canceled)
 }
 
 int boundedRowsForWidth(int width, quint64 estimatedBytesPerPixel,
-                        quint64 usableBudget = NativeBufferBudget)
+                        quint64 usableBudget = BoundedNativeBufferBudget)
 {
     if (width <= 0 || estimatedBytesPerPixel == 0)
         return 1;
@@ -482,6 +483,42 @@ bool preflightStorage(int width, int height, int sourceWidth, int sourceHeight,
         return false;
     }
     return true;
+}
+
+RasterStrategyDecision selectRasterStrategy(
+    int width, int height, int logicalChannels, bool multiInk)
+{
+    RasterStrategyDecision decision;
+    decision.nativeLimitBytes = InMemoryRasterBudget;
+    if (width <= 0 || height <= 0 || logicalChannels <= 0)
+        return decision;
+
+    const quint64 pixels = quint64(width) * quint64(height);
+    if (pixels > quint64(std::numeric_limits<int>::max()))
+        return decision;
+
+    // The fast path holds complete tone and packed planes. Multi-ink tone
+    // splitting temporarily retains more full-frame vectors than X-33. These
+    // deliberately conservative estimates decide whether the job fits inside
+    // the 4 GiB fast-path allowance. Larger jobs use bounded strips instead.
+    const quint64 bytesPerPixel = multiInk
+        ? 24ULL + 2ULL * quint64(logicalChannels)
+        : 16ULL + (quint64(logicalChannels) + 3ULL) / 4ULL;
+    constexpr quint64 fixedOverhead = 8ULL * MiB;
+    if (pixels > (std::numeric_limits<quint64>::max() - fixedOverhead)
+                     / bytesPerPixel)
+        return decision;
+    decision.estimatedNativeBytes = pixels * bytesPerPixel + fixedOverhead;
+
+    const QByteArray forced = qgetenv("PRINTFLOW_FORCE_RASTER_STRATEGY")
+                                  .trimmed().toLower();
+    if (forced == "bounded")
+        return decision;
+    if (forced == "memory" ||
+        decision.estimatedNativeBytes <= decision.nativeLimitBytes) {
+        decision.strategy = RasterStrategy::InMemory;
+    }
+    return decision;
 }
 
 bool CanonicalCmykFile::create(

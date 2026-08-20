@@ -1300,7 +1300,7 @@ Item {
                 anchors.top: outputProgressBar.bottom
                 anchors.topMargin: 14
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: strings.trKey("jobs.progress.cancelOutput")
+                text: strings.trKey("common.cancel")
                 theme: root.theme
                 onClicked: {
                     printJobCMYK.cancelOutput()

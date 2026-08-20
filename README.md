@@ -115,11 +115,16 @@ For local builds that generate multi-ink output, the app expects `resources/asse
 
 Theme assets live under `resources/themes/<theme-id>/assets/` or `resources/vendor/<vendor-id>/assets/` and are compiled into Qt resources when referenced by theme JSON. Raw vendor drops, demo programs, and diagnostics stay ignored; the four reviewed Linux runtime libraries are centralized under `third_party/nocai/direct-print/`.
 
-## Bounded raster and spool output
+## Hybrid raster and spool output
 
-Production X-33 and X-36 Studio output uses a 512 MiB RIP working-memory budget:
-192 MiB for ImageMagick memory, 128 MiB for its mapped cache, 128 MiB for native
-strip and mask buffers, and 64 MiB of contingency. Before rasterization, the app
+Production X-33 and X-36 Studio output prioritizes the faster full-frame raster
+path when its conservative native-memory estimate is no more than 4 GiB. Jobs
+above that limit automatically use the bounded strip path. If a fast-path
+allocation fails, the job safely retries with bounded strips.
+
+The bounded path uses a 512 MiB RIP working-memory budget: 192 MiB for
+ImageMagick memory, 128 MiB for its mapped cache, 128 MiB for native strip and
+mask buffers, and 64 MiB of contingency. Before bounded rasterization, the app
 reports and validates scratch-space requirements for ImageMagick caches,
 canonical CMYK/plate data, packed spool data, an optional PRN, and a 20 percent
 safety margin. Insufficient disk, allocation failures, cancellation, and cache

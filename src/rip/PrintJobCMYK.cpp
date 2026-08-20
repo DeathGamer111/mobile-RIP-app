@@ -1,6 +1,7 @@
 #include "PrintJobCMYK.h"
 #include "BoundedRasterPipeline.h"
 #include "ImagePhysicalSize.h"
+#include "MultiInkScreenEngine.h"
 #include "NocaiPrnWriter.h"
 #include <QDirIterator>
 #include <QFile>
@@ -388,6 +389,34 @@ bool PrintJobCMYK::buildRasterSpool(
         const int width = static_cast<int>(inputImage.columns());
         const int height = static_cast<int>(inputImage.rows());
 
+        const auto strategy = BoundedRasterPipeline::selectRasterStrategy(
+            width, height, logicalChannelCount, false);
+        const auto mib = [](quint64 bytes) {
+            return (bytes + 1024ULL * 1024ULL - 1) / (1024ULL * 1024ULL);
+        };
+        if (strategy.strategy == BoundedRasterPipeline::RasterStrategy::InMemory) {
+            qInfo().noquote()
+                << QStringLiteral("PrintJobCMYK: raster strategy = in-memory (estimated %1 MiB; limit %2 MiB).")
+                       .arg(mib(strategy.estimatedNativeBytes))
+                       .arg(mib(strategy.nativeLimitBytes));
+            try {
+                if (buildInMemoryRasterSpool(xdpi, ydpi, spool))
+                    return true;
+            } catch (const Magick::Exception& error) {
+                qWarning() << "PrintJobCMYK: in-memory raster failed; retrying with bounded strips:"
+                           << error.what();
+            } catch (const std::bad_alloc&) {
+                qWarning() << "PrintJobCMYK: in-memory raster exceeded its allocation; retrying with bounded strips.";
+            }
+            if (m_cancelRequested.load(std::memory_order_relaxed))
+                return false;
+            spool = {};
+        }
+        qInfo().noquote()
+            << QStringLiteral("PrintJobCMYK: raster strategy = bounded strips (estimated in-memory use %1 MiB; limit %2 MiB).")
+                   .arg(mib(strategy.estimatedNativeBytes))
+                   .arg(mib(strategy.nativeLimitBytes));
+
         BoundedRasterPipeline::CanonicalCmykFile canonical;
         emit outputPhaseChanged(QStringLiteral("preprocessing"));
         QString error;
@@ -556,6 +585,197 @@ bool PrintJobCMYK::buildRasterSpool(
         qWarning() << "PrintJobCMYK: bounded raster allocation failed.";
         return false;
     }
+}
+
+bool PrintJobCMYK::buildInMemoryRasterSpool(
+    int xdpi, int ydpi, DirectPrintSpool& spool)
+{
+    const int width = static_cast<int>(inputImage.columns());
+    const int height = static_cast<int>(inputImage.rows());
+    const size_t pixels = static_cast<size_t>(width) * size_t(height);
+    const bool whiteEnabled = x33WhiteMode != X33WhiteToneBuilder::Mode::Off;
+    const int logicalChannels = whiteEnabled ? 5 : 4;
+
+    std::vector<uint8_t> interleaved(pixels * 4ULL);
+    inputImage.write(0, 0, width, height, "CMYK", Magick::CharPixel,
+                     interleaved.data());
+    std::array<std::vector<uint8_t>, 4> cmyk;
+    for (auto& channel : cmyk)
+        channel.resize(pixels);
+    for (size_t pixel = 0; pixel < pixels; ++pixel) {
+        for (int channel = 0; channel < 4; ++channel)
+            cmyk[size_t(channel)][pixel] =
+                interleaved[pixel * 4ULL + size_t(channel)];
+    }
+    std::vector<uint8_t>().swap(interleaved);
+    for (auto& channel : cmyk) {
+        if (!sourceAlphaMask.applyTo(channel)) {
+            qWarning() << "PrintJobCMYK: source alpha mask does not match the in-memory raster.";
+            return false;
+        }
+    }
+    if (x33Linearization.hasExternalCurves()) {
+        if (!x33Linearization.applyFourColorTones(cmyk))
+            return false;
+        qDebug() << "PrintJobCMYK: applied X-33 linearization curves to CMYK tone channels:"
+                 << x33LinearizationPath;
+    }
+
+    std::vector<uint8_t> whiteTone;
+    if (whiteEnabled) {
+        X33WhiteToneBuilder::BuildRequest request;
+        request.cmykTones = &cmyk;
+        request.width = width;
+        request.height = height;
+        request.mode = x33WhiteMode;
+        request.threshold = x33WhiteThreshold;
+        request.density = x33WhiteDensity;
+        request.platePath = x33WhitePlatePath;
+        if (!X33WhiteToneBuilder::build(
+                request, whiteTone,
+                [](const QString& sourcePath, std::vector<uint8_t>& plate,
+                   int plateWidth, int plateHeight) {
+                    QString path = sourcePath.trimmed();
+                    if (path.startsWith("file:", Qt::CaseInsensitive))
+                        path = QUrl(path).toLocalFile();
+                    if (path.isEmpty() || !QFileInfo::exists(path))
+                        return false;
+                    Magick::Image image(path.toStdString());
+                    image.colorSpace(Magick::GRAYColorspace);
+                    image.type(Magick::GrayscaleType);
+                    if (static_cast<int>(image.columns()) != plateWidth ||
+                        static_cast<int>(image.rows()) != plateHeight) {
+                        image.resize(Magick::Geometry(
+                            QString("%1x%2!").arg(plateWidth).arg(plateHeight)
+                                .toStdString()));
+                    }
+                    plate.resize(static_cast<size_t>(plateWidth) * plateHeight);
+                    image.write(0, 0, plateWidth, plateHeight, "I",
+                                Magick::CharPixel, plate.data());
+                    return true;
+                })) {
+            qWarning() << "PrintJobCMYK: could not build the in-memory X-33 white tone.";
+            return false;
+        }
+        if (x33Linearization.hasExternalCurves() &&
+            !x33Linearization.applyWhiteTone(whiteTone))
+            return false;
+    }
+    std::vector<std::vector<uint8_t>> tones;
+    tones.resize(static_cast<size_t>(logicalChannels));
+    for (int channel = 0; channel < 4; ++channel)
+        tones[size_t(channel)] = std::move(cmyk[size_t(channel)]);
+    if (whiteEnabled)
+        tones[4] = std::move(whiteTone);
+
+    MultiInkScreenEngine::ScreenRequest screen;
+    screen.width = width;
+    screen.height = height;
+    screen.screenSeed = screenSeed;
+    screen.dotStrategy.minInkThreshold = dotStrategy.minInkThreshold;
+    screen.dotStrategy.smallDotThreshold = dotStrategy.smallDotThreshold;
+    screen.dotStrategy.medDotThreshold = dotStrategy.medDotThreshold;
+    screen.dotStrategy.enablePromotion = dotStrategy.enablePromotion;
+    screen.dotStrategy.floorRangeCMY = dotStrategy.floorRangeCMY;
+    screen.dotStrategy.floorMaxCMY = dotStrategy.floorMaxCMY;
+    screen.dotStrategy.floorRangeK = dotStrategy.floorRangeK;
+    screen.dotStrategy.floorMaxK = dotStrategy.floorMaxK;
+    screen.dotStrategy.enableDotSwap = dotStrategy.enableDotSwap;
+    screen.canceled = &m_cancelRequested;
+    screen.progress = [this](qint64 completed, qint64 total) {
+        emit outputProgressChanged(completed, total);
+    };
+    const QStringList keys = whiteEnabled
+        ? QStringList{"c", "m", "y", "k", x33WhiteMaskKey}
+        : QStringList{"c", "m", "y", "k"};
+    bool skippedPromotion = false;
+    for (int channel = 0; channel < logicalChannels; ++channel) {
+        MultiInkScreenEngine::ChannelRequest request;
+        request.maskKey = keys[channel];
+        request.toneBytes = &tones[size_t(channel)];
+        request.useEffectiveTone = false;
+        request.floorClass = channel == 3 ? 1 : 0;
+        if (channel == 4 && x33WhiteUseOwnDotStrategy) {
+            request.useOwnDotStrategy = true;
+            request.ownSmallDotThreshold = x33WhiteSmallDotThreshold;
+            request.ownMedDotThreshold = x33WhiteMedDotThreshold;
+            request.ownEnablePromotion = x33WhiteEnablePromotion;
+            skippedPromotion = skippedPromotion || !x33WhiteEnablePromotion;
+        } else {
+            skippedPromotion = skippedPromotion || !dotStrategy.enablePromotion;
+        }
+        screen.channels.push_back(request);
+    }
+    if (skippedPromotion)
+        qDebug() << "Dot Promotion Disabled — skipping Dot Promotion.";
+
+    emit outputPhaseChanged(QStringLiteral("rasterizing"));
+    MultiInkScreenEngine::AllPackedLines packed;
+    if (!MultiInkScreenEngine::screenChannels(
+            screen,
+            [this](const QString& key, std::vector<uint8_t>& mask,
+                   int& maskWidth, int& maskHeight) {
+                Magick::Image image((assetsExtractPath +
+                    QString("/mask_512_%1.tiff").arg(key)).toStdString());
+                maskWidth = static_cast<int>(image.columns());
+                maskHeight = static_cast<int>(image.rows());
+                if (maskWidth <= 0 || maskHeight <= 0)
+                    return false;
+                mask.resize(static_cast<size_t>(maskWidth) * maskHeight);
+                image.write(0, 0, maskWidth, maskHeight, "I",
+                            Magick::CharPixel, mask.data());
+                return true;
+            }, packed)) {
+        return false;
+    }
+
+    spool = {};
+    spool.channelOrder = whiteEnabled
+        ? std::vector<int>{2, 1, 0, 3, 4, 4}
+        : std::vector<int>{2, 1, 0, 3};
+    spool.logicalChannelCount = logicalChannels;
+    spool.width = width;
+    spool.height = height;
+    spool.xdpi = xdpi;
+    spool.ydpi = ydpi;
+    spool.bytesPerLine = (((width + 3) / 4) + 3) & ~3;
+    spool.format = DirectPrintRasterFormat::NocaiX33Standard;
+    spool.canonicalHeader = NocaiPrnWriter::makeStandardX33Header(
+        width, height, xdpi, ydpi, spool.bytesPerLine,
+        int(spool.channelOrder.size()));
+
+    emit outputPhaseChanged(QStringLiteral("spooling"));
+    QString error;
+    PrintFlowRasterSpool::Writer writer;
+    if (!writer.create(BoundedRasterPipeline::scratchDirectory(), spool, &error)) {
+        qWarning().noquote() << "PrintJobCMYK:" << error;
+        return false;
+    }
+    for (int channel = 0; channel < logicalChannels; ++channel) {
+        for (int row = 0; row < height; ++row) {
+            if (m_cancelRequested.load(std::memory_order_relaxed))
+                return false;
+            const auto& line = packed[size_t(channel)][size_t(row)];
+            if (!writer.writeLine(channel, row, line.data(),
+                                  qsizetype(line.size()), &error)) {
+                qWarning().noquote() << "PrintJobCMYK:" << error;
+                return false;
+            }
+        }
+    }
+    if (!writer.finalize(
+            &spool, &error,
+            [this]() {
+                return m_cancelRequested.load(std::memory_order_relaxed);
+            })) {
+        qWarning().noquote() << "PrintJobCMYK:" << error;
+        return false;
+    }
+    if (whiteEnabled) {
+        qDebug() << "PrintJobCMYK: X-33 white enabled; prepared YMCKWW raster with"
+                 << spool.channelOrder.size() << "physical planes.";
+    }
+    return true;
 }
 
 bool PrintJobCMYK::writePRNFile(const DirectPrintSpool& spool, const QString& outputPath) {
@@ -1052,29 +1272,61 @@ void PrintJobCMYK::seedX33DefaultAssets()
 {
     if (!m_colorManager || assetsExtractPath.isEmpty())
         return;
+    const auto localPath = [](const QString& value) {
+        return value.startsWith("file:", Qt::CaseInsensitive)
+            ? QUrl(value).toLocalFile() : value;
+    };
     const auto configuredPathExists = [](const QString& value) {
         const QString path = value.startsWith("file:", Qt::CaseInsensitive)
             ? QUrl(value).toLocalFile() : value;
         return !path.trimmed().isEmpty() && QFileInfo::exists(path);
     };
+    const auto isBundledAssetSelection = [&localPath](
+        const QString& value, const QString& bundledFileName) {
+        return QFileInfo(localPath(value)).fileName()
+            .compare(bundledFileName, Qt::CaseInsensitive) == 0;
+    };
     const QString x33Profile =
         m_assetManager.assetPath("RIP_App_1440_Plain_Default.icc");
+    const QString inputCmyk =
+        m_assetManager.assetPath("RIP_App_Generic_CMYK.icc");
     const QString x33Linearization =
         m_assetManager.assetPath("RIP_App_Linearization_1440_X-33.xml");
+    bool defaultsChanged = false;
     const QString configuredProfile =
         m_colorManager->printerFamilyOutputProfile("X-33", "A");
     if (configuredProfile.trimmed().isEmpty()
-        || !configuredPathExists(configuredProfile)) {
+        || !configuredPathExists(configuredProfile)
+        || isBundledAssetSelection(
+            configuredProfile, "RIP_App_1440_Plain_Default.icc")) {
         m_colorManager->setPrinterFamilyOutputProfile(
             "X-33", "A", x33Profile);
+        defaultsChanged = true;
+    }
+    const QString configuredInput = m_colorManager->defaultInputProfile();
+    if (configuredInput.trimmed().isEmpty()
+        || !configuredPathExists(configuredInput)
+        || isBundledAssetSelection(
+            configuredInput, "RIP_App_Generic_CMYK.icc")) {
+        m_colorManager->setDefaultInputProfile(inputCmyk);
+        defaultsChanged = true;
     }
     const QString configuredLinearization =
         m_colorManager->printerFamilyLinearizationPath("X-33", "A");
     if (configuredLinearization.trimmed().isEmpty()
-        || !configuredPathExists(configuredLinearization)) {
+        || !configuredPathExists(configuredLinearization)
+        || isBundledAssetSelection(
+            configuredLinearization,
+            "RIP_App_Linearization_1440_X-33.xml")
+        || isBundledAssetSelection(
+            configuredLinearization,
+            "X-33_Linearization_v1.xml")) {
         m_colorManager->setPrinterFamilyLinearizationPath(
             "X-33", "A", x33Linearization);
+        defaultsChanged = true;
     }
+    if (defaultsChanged && !m_colorManager->save())
+        qWarning() << "PrintJobCMYK: failed to persist the X-33 bundled defaults.";
 }
 
 

@@ -55,7 +55,6 @@
   "jobs.progress.preprocessing": "正在准备图像...",
   "jobs.progress.spooling": "正在验证栅格数据...",
   "jobs.progress.uploading": "正在上传栅格数据...",
-  "jobs.progress.cancelOutput": "取消输出",
   "jobs.progress.generatingPrn": "正在生成 PRN...",
   "jobs.progress.printing": "正在打印...",
   "jobs.progress.preparingPrint": "正在准备打印作业...",

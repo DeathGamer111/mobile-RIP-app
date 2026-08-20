@@ -65,6 +65,7 @@ set(RIP_NATIVE_SOURCES
     src/rip/ImagePhysicalSize.h
     src/rip/MagickCompatibility.h
     src/rip/MultiInkLinearization.h src/rip/MultiInkLinearization.cpp
+    src/rip/MultiInkScreenEngine.h src/rip/MultiInkScreenEngine.cpp
     src/rip/MultiInkToneBuilder.h src/rip/MultiInkToneBuilder.cpp
     src/rip/MultiInkTypes.h
     src/rip/RasterAlphaMask.h src/rip/RasterAlphaMask.cpp

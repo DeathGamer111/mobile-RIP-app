@@ -42,6 +42,25 @@ static constexpr quint32 kWorkerJobVersion = 3;
 static constexpr quint32 kWorkerSpoolMagic = 0x50465357u; // "PFSW"
 static constexpr quint32 kWorkerSpoolVersion = 2;
 
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+bool processHasNetRawCapability()
+{
+    QFile status(QStringLiteral("/proc/self/status"));
+    if (!status.open(QIODevice::ReadOnly | QIODevice::Text))
+        return false;
+    while (!status.atEnd()) {
+        const QByteArray line = status.readLine().trimmed();
+        if (!line.startsWith("CapEff:"))
+            continue;
+        bool ok = false;
+        const quint64 capabilities = line.mid(sizeof("CapEff:") - 1)
+                                         .trimmed().toULongLong(&ok, 16);
+        return ok && (capabilities & (quint64(1) << 13)) != 0;
+    }
+    return false;
+}
+#endif
+
 void writeWorkerSettings(QDataStream& out, const DirectPrintSettings& settings)
 {
     out << qint32(settings.printerIndex)
@@ -490,6 +509,19 @@ bool NocaiDirectPrintClient::refreshPrinters()
     QMutexLocker locker(&m_mutex);
     if (!ensureLoaded())
         return false;
+
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+    if (QCoreApplication::applicationName() ==
+            QLatin1String("PrintFlowPrinterService") &&
+        !processHasNetRawCapability()) {
+        setError(QStringLiteral(
+            "Printer discovery permission is missing (CAP_NET_RAW). Run "
+            "'sudo setcap cap_net_raw+ep %1' after rebuilding the printer service, then restart it.")
+                     .arg(QCoreApplication::applicationFilePath()));
+        emit statusChanged();
+        return false;
+    }
+#endif
 
 #if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
     // ConnectPrinter initializes controller state that the ARM SDK does not

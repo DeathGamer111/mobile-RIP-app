@@ -17,6 +17,17 @@ namespace BoundedRasterPipeline {
 
 constexpr int MaximumStripRows = 128;
 
+enum class RasterStrategy {
+    InMemory,
+    Bounded
+};
+
+struct RasterStrategyDecision {
+    RasterStrategy strategy = RasterStrategy::Bounded;
+    quint64 estimatedNativeBytes = 0;
+    quint64 nativeLimitBytes = 0;
+};
+
 struct SourceInfo {
     int width = 0;
     int height = 0;
@@ -41,6 +52,8 @@ bool preflightStorage(int width, int height, int sourceWidth, int sourceHeight,
                       int externalPlateCaches = 0,
                       quint64 maskCacheBytes = 0,
                       QString* errorMessage = nullptr);
+RasterStrategyDecision selectRasterStrategy(
+    int width, int height, int logicalChannels, bool multiInk);
 
 class CanonicalCmykFile
 {

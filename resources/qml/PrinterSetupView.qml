@@ -296,7 +296,7 @@ Page {
 
 			iccProfileDropdown.currentIndex = -1
 			for (let i = 0; i < iccProfileModel.count; ++i) {
-				if (iccProfileModel.get(i).path === currentDefault) {
+				if (normalizePath(iccProfileModel.get(i).path) === normalizePath(currentDefault)) {
 					iccProfileDropdown.currentIndex = i
 					break
 				}
@@ -306,7 +306,7 @@ Page {
 		    const currentInputCmyk = backend.getDefaultInputCMYKProfile()
 		    inputCmykDropdown.currentIndex = -1
 		    for (let i = 0; i < iccProfileModel.count; ++i) {
-		        if (iccProfileModel.get(i).path === currentInputCmyk) {
+		        if (normalizePath(iccProfileModel.get(i).path) === normalizePath(currentInputCmyk)) {
 		            inputCmykDropdown.currentIndex = i
 		            break
 		        }

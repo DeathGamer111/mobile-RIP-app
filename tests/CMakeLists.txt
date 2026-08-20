@@ -252,6 +252,8 @@ add_printflow_qt_test(PrintFlowCMYKAssetManagerTest PrintFlow.Rip.CMYKAssetManag
     ${PROJECT_SOURCE_DIR}/src/rip/BoundedRasterPipeline.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/MultiInkLinearization.h
     ${PROJECT_SOURCE_DIR}/src/rip/MultiInkLinearization.cpp
+    ${PROJECT_SOURCE_DIR}/src/rip/MultiInkScreenEngine.h
+    ${PROJECT_SOURCE_DIR}/src/rip/MultiInkScreenEngine.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/X33WhiteToneBuilder.h
     ${PROJECT_SOURCE_DIR}/src/rip/X33WhiteToneBuilder.cpp
     ${PROJECT_SOURCE_DIR}/src/rip/PrintJobCMYK.h

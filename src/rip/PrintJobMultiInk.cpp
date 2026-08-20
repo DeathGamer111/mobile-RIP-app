@@ -1,6 +1,7 @@
 #include "PrintJobMultiInk.h"
 #include "BoundedRasterPipeline.h"
 #include "ImagePhysicalSize.h"
+#include "MultiInkScreenEngine.h"
 #include "NocaiPrnWriter.h"
 
 #include <QDateTime>
@@ -1056,6 +1057,34 @@ bool PrintJobMultiInk::buildRasterSpool(
         const int width = static_cast<int>(inputImage.columns());
         const int height = static_cast<int>(inputImage.rows());
 
+        const auto strategy = BoundedRasterPipeline::selectRasterStrategy(
+            width, height, logicalChannels, true);
+        const auto mib = [](quint64 bytes) {
+            return (bytes + 1024ULL * 1024ULL - 1) / (1024ULL * 1024ULL);
+        };
+        if (strategy.strategy == BoundedRasterPipeline::RasterStrategy::InMemory) {
+            qInfo().noquote()
+                << QStringLiteral("PrintJobMultiInk: raster strategy = in-memory (estimated %1 MiB; limit %2 MiB).")
+                       .arg(mib(strategy.estimatedNativeBytes))
+                       .arg(mib(strategy.nativeLimitBytes));
+            try {
+                if (buildInMemoryRasterSpool(xdpi, ydpi, spool))
+                    return true;
+            } catch (const Magick::Exception& rasterError) {
+                qWarning() << "PrintJobMultiInk: in-memory raster failed; retrying with bounded strips:"
+                           << rasterError.what();
+            } catch (const std::bad_alloc&) {
+                qWarning() << "PrintJobMultiInk: in-memory raster exceeded its allocation; retrying with bounded strips.";
+            }
+            if (m_cancelRequested.load(std::memory_order_relaxed))
+                return false;
+            spool = {};
+        }
+        qInfo().noquote()
+            << QStringLiteral("PrintJobMultiInk: raster strategy = bounded strips (estimated in-memory use %1 MiB; limit %2 MiB).")
+                   .arg(mib(strategy.estimatedNativeBytes))
+                   .arg(mib(strategy.nativeLimitBytes));
+
         BoundedRasterPipeline::CanonicalCmykFile canonical;
         emit outputPhaseChanged(QStringLiteral("preprocessing"));
         if (!canonical.create(
@@ -1244,6 +1273,209 @@ bool PrintJobMultiInk::buildRasterSpool(
         qWarning() << "PrintJobMultiInk: bounded raster allocation failed.";
         return false;
     }
+}
+
+bool PrintJobMultiInk::buildInMemoryRasterSpool(
+    int xdpi, int ydpi, DirectPrintSpool& spool)
+{
+    const int width = static_cast<int>(inputImage.columns());
+    const int height = static_cast<int>(inputImage.rows());
+    const size_t pixels = static_cast<size_t>(width) * size_t(height);
+    const int logicalChannels = static_cast<int>(m_inkMode);
+
+    std::vector<uint8_t> interleaved(pixels * 4ULL);
+    inputImage.write(0, 0, width, height, "CMYK", Magick::CharPixel,
+                     interleaved.data());
+    std::array<std::vector<uint8_t>, 4> separatedBytes;
+    for (auto& channel : separatedBytes)
+        channel.resize(pixels);
+    for (size_t pixel = 0; pixel < pixels; ++pixel) {
+        for (int channel = 0; channel < 4; ++channel)
+            separatedBytes[size_t(channel)][pixel] =
+                interleaved[pixel * 4ULL + size_t(channel)];
+    }
+    std::vector<uint8_t>().swap(interleaved);
+
+    std::array<Magick::Image, 4> separatedImages;
+    for (int channel = 0; channel < 4; ++channel) {
+        if (!sourceAlphaMask.applyTo(separatedBytes[size_t(channel)])) {
+            qWarning() << "PrintJobMultiInk: source alpha mask does not match the in-memory raster.";
+            return false;
+        }
+        separatedImages[size_t(channel)] = Magick::Image(
+            Magick::Geometry(width, height), "white");
+        separatedImages[size_t(channel)].depth(8);
+        separatedImages[size_t(channel)].type(Magick::GrayscaleType);
+        separatedImages[size_t(channel)].read(
+            width, height, "I", Magick::CharPixel,
+            separatedBytes[size_t(channel)].data());
+        std::vector<uint8_t>().swap(separatedBytes[size_t(channel)]);
+    }
+
+    auto loadPlate = [](const QString& sourcePath, std::vector<uint8_t>& plate,
+                        int plateWidth, int plateHeight) {
+        QString path = sourcePath.trimmed();
+        if (path.startsWith("file:", Qt::CaseInsensitive))
+            path = QUrl(path).toLocalFile();
+        if (path.isEmpty() || !QFileInfo::exists(path))
+            return false;
+        Magick::Image image(path.toStdString());
+        image.colorSpace(Magick::GRAYColorspace);
+        image.type(Magick::GrayscaleType);
+        if (static_cast<int>(image.columns()) != plateWidth ||
+            static_cast<int>(image.rows()) != plateHeight) {
+            image.resize(Magick::Geometry(
+                QString("%1x%2!").arg(plateWidth).arg(plateHeight)
+                    .toStdString()));
+        }
+        plate.resize(static_cast<size_t>(plateWidth) * plateHeight);
+        image.write(0, 0, plateWidth, plateHeight, "I",
+                    Magick::CharPixel, plate.data());
+        return true;
+    };
+
+    std::vector<std::vector<uint8_t>> tones;
+    MultiInkToneBuilder::BuildRequest toneRequest;
+    toneRequest.cmykImages = &separatedImages;
+    toneRequest.mode = static_cast<MultiInkToneBuilder::InkMode>(logicalChannels);
+    toneRequest.modeParams = m_modeParams;
+    toneRequest.whitePlatePath = m_whitePlatePath;
+    toneRequest.varnishPlatePath = m_varnishPlatePath;
+    toneRequest.linearization = &m_linearization;
+    toneRequest.enableLinearization = m_enableLinearization;
+    toneRequest.logConfiguration = true;
+    if (!MultiInkToneBuilder::buildToneChannels(
+            toneRequest, tones, loadPlate) ||
+        static_cast<int>(tones.size()) != logicalChannels) {
+        qWarning() << "PrintJobMultiInk: failed to build in-memory tone channels.";
+        return false;
+    }
+
+    const bool modeHasWhite =
+        m_inkMode == InkMode::FiveColor_YMCK_W ||
+        m_inkMode == InkMode::SevenColor_YMCK_Lm_Lc_W ||
+        m_inkMode == InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V;
+    const bool modeHasVarnish =
+        m_inkMode == InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V;
+    const auto isLightChannel = [&](int channel) {
+        if (m_inkMode == InkMode::SixColor_YMCK_Lm_Lc ||
+            m_inkMode == InkMode::SevenColor_YMCK_Lm_Lc_W)
+            return channel == 4 || channel == 5;
+        if (m_inkMode == InkMode::EightColor_YMCK_Lm_Lc_Lk_LLk ||
+            m_inkMode == InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V)
+            return channel >= 4 && channel <= 7;
+        return false;
+    };
+
+    MultiInkScreenEngine::ScreenRequest screen;
+    screen.width = width;
+    screen.height = height;
+    screen.screenSeed = screenSeed;
+    screen.modeParams = m_modeParams;
+    screen.dotStrategy = dotStrategy;
+    screen.canceled = &m_cancelRequested;
+    screen.progress = [this](qint64 completed, qint64 total) {
+        emit outputProgressChanged(completed, total);
+    };
+    for (int channel = 0; channel < logicalChannels; ++channel) {
+        MultiInkScreenEngine::ChannelRequest request;
+        request.maskKey = maskKeyForChannel(m_inkMode, channel);
+        request.toneBytes = &tones[size_t(channel)];
+        request.isLightInk = isLightChannel(channel);
+        request.useEffectiveTone = true;
+        const bool isWhite = modeHasWhite &&
+            ((m_inkMode == InkMode::FiveColor_YMCK_W && channel == 4) ||
+             (m_inkMode == InkMode::SevenColor_YMCK_Lm_Lc_W && channel == 6) ||
+             (m_inkMode == InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V && channel == 8));
+        const bool isVarnish = modeHasVarnish && channel == 9;
+        if (isWhite && m_modeParams.value(
+                "whiteUseOwnDotStrategy", false).toBool()) {
+            request.useOwnDotStrategy = true;
+            request.ownSmallDotThreshold = std::clamp(
+                m_modeParams.value("whiteSmallDotThreshold", 104).toInt(), 0, 255);
+            request.ownMedDotThreshold = std::clamp(
+                m_modeParams.value("whiteMedDotThreshold", 168).toInt(), 0, 255);
+            request.ownEnablePromotion = m_modeParams.value(
+                "whiteEnablePromotion", false).toBool();
+        }
+        if (isVarnish && m_modeParams.value(
+                "varnishUseOwnDotStrategy", false).toBool()) {
+            request.useOwnDotStrategy = true;
+            request.ownSmallDotThreshold = std::clamp(
+                m_modeParams.value("varnishSmallDotThreshold", 104).toInt(), 0, 255);
+            request.ownMedDotThreshold = std::clamp(
+                m_modeParams.value("varnishMedDotThreshold", 168).toInt(), 0, 255);
+            request.ownEnablePromotion = m_modeParams.value(
+                "varnishEnablePromotion", false).toBool();
+        }
+        screen.channels.push_back(request);
+    }
+
+    emit outputPhaseChanged(QStringLiteral("rasterizing"));
+    MultiInkScreenEngine::AllPackedLines packed;
+    if (!MultiInkScreenEngine::screenChannels(
+            screen,
+            [this](const QString& key, std::vector<uint8_t>& mask,
+                   int& maskWidth, int& maskHeight) {
+                Magick::Image image(m_assetManager.assetPath(
+                    QString("mask_512_%1.tiff").arg(key)).toStdString());
+                maskWidth = static_cast<int>(image.columns());
+                maskHeight = static_cast<int>(image.rows());
+                if (maskWidth <= 0 || maskHeight <= 0)
+                    return false;
+                mask.resize(static_cast<size_t>(maskWidth) * maskHeight);
+                image.write(0, 0, maskWidth, maskHeight, "I",
+                            Magick::CharPixel, mask.data());
+                return true;
+            }, packed)) {
+        return false;
+    }
+
+    spool = {};
+    switch (m_inkMode) {
+    case InkMode::FourColor_YMCK: spool.channelOrder = {2, 1, 0, 3}; break;
+    case InkMode::FiveColor_YMCK_W: spool.channelOrder = {2, 1, 0, 3, 4}; break;
+    case InkMode::SixColor_YMCK_Lm_Lc: spool.channelOrder = {2, 1, 0, 3, 4, 5}; break;
+    case InkMode::SevenColor_YMCK_Lm_Lc_W: spool.channelOrder = {2, 1, 0, 3, 4, 5, 6}; break;
+    case InkMode::EightColor_YMCK_Lm_Lc_Lk_LLk: spool.channelOrder = {2, 1, 0, 3, 5, 4, 6, 7}; break;
+    case InkMode::TenColor_YMCK_Lm_Lc_Lk_LLk_W_V: spool.channelOrder = {2, 1, 0, 3, 5, 4, 6, 7, 8, 9}; break;
+    }
+    spool.logicalChannelCount = logicalChannels;
+    spool.width = width;
+    spool.height = height;
+    spool.xdpi = xdpi;
+    spool.ydpi = ydpi;
+    spool.bytesPerLine = (((width + 3) / 4) + 3) & ~3;
+    spool.format = DirectPrintRasterFormat::NocaiMultiInk;
+
+    emit outputPhaseChanged(QStringLiteral("spooling"));
+    QString error;
+    PrintFlowRasterSpool::Writer writer;
+    if (!writer.create(BoundedRasterPipeline::scratchDirectory(), spool, &error)) {
+        qWarning().noquote() << "PrintJobMultiInk:" << error;
+        return false;
+    }
+    for (int channel = 0; channel < logicalChannels; ++channel) {
+        for (int row = 0; row < height; ++row) {
+            if (m_cancelRequested.load(std::memory_order_relaxed))
+                return false;
+            const auto& line = packed[size_t(channel)][size_t(row)];
+            if (!writer.writeLine(channel, row, line.data(),
+                                  qsizetype(line.size()), &error)) {
+                qWarning().noquote() << "PrintJobMultiInk:" << error;
+                return false;
+            }
+        }
+    }
+    if (!writer.finalize(
+            &spool, &error,
+            [this]() {
+                return m_cancelRequested.load(std::memory_order_relaxed);
+            })) {
+        qWarning().noquote() << "PrintJobMultiInk:" << error;
+        return false;
+    }
+    return true;
 }
 
 

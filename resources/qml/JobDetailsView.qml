@@ -135,12 +135,11 @@ Item {
 	        syncOffsetControlsFromJob()
 	        whitePlatePath = jobData.whitePlatePath || ""
 	        varnishPlatePath = jobData.varnishPlatePath || ""
-	        refreshPreview()
-	        updatePrintedSize()
-	        
 	        if (jobData.imagePath !== "") {
 				updateMetadata(jobData.imagePath)
 			}
+	        refreshPreview()
+	        updatePrintedSize()
         }
     }
 
