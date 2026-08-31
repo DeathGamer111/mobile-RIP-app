@@ -132,6 +132,59 @@ needs_theme_selection() {
     esac
 }
 
+needs_blue_noise_masks() {
+    case "$1" in
+        linux|linux-package|android|android-device|android-build|android-setup-build) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+ensure_blue_noise_masks() {
+    local mask_dir="${SCRIPT_DIR}/resources/assets/blue_noise_mask_512_12000"
+    local lfs_pattern="resources/assets/blue_noise_mask_512_12000/*.tiff"
+    local -a mask_names=(c m y k lc lm lk llk w v)
+    local mask_name mask_path
+    local pull_required=0
+
+    is_lfs_pointer() {
+        [[ -f "$1" ]] || return 1
+        head -c 42 "$1" 2>/dev/null |
+            grep -aFqx 'version https://git-lfs.github.com/spec/v1'
+    }
+
+    for mask_name in "${mask_names[@]}"; do
+        mask_path="${mask_dir}/mask_${mask_name}.tiff"
+        if [[ ! -s "${mask_path}" ]] || is_lfs_pointer "${mask_path}"; then
+            pull_required=1
+            break
+        fi
+    done
+
+    (( pull_required == 1 )) || return 0
+
+    command -v git-lfs >/dev/null 2>&1 || {
+        printf 'Git LFS is required to download the production blue-noise masks.\n' >&2
+        printf 'Install it (for example, sudo apt-get install git-lfs) and rerun this build.\n' >&2
+        exit 1
+    }
+    git -C "${SCRIPT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+        printf 'Blue-noise masks are missing and this source tree is not a Git checkout.\n' >&2
+        exit 1
+    }
+
+    printf 'Fetching production blue-noise masks with Git LFS...\n'
+    git -C "${SCRIPT_DIR}" lfs install --local
+    git -C "${SCRIPT_DIR}" lfs pull --include="${lfs_pattern}" --exclude=""
+
+    for mask_name in "${mask_names[@]}"; do
+        mask_path="${mask_dir}/mask_${mask_name}.tiff"
+        if [[ ! -s "${mask_path}" ]] || is_lfs_pointer "${mask_path}"; then
+            printf 'Blue-noise mask was not hydrated by Git LFS: %s\n' "${mask_path}" >&2
+            exit 1
+        fi
+    done
+}
+
 validate_builtin_theme() {
     case "$1" in
         default|nocai|xante) return 0 ;;
@@ -221,6 +274,10 @@ EOF
 
 if needs_theme_selection "${mode}"; then
     choose_theme
+fi
+
+if needs_blue_noise_masks "${mode}"; then
+    ensure_blue_noise_masks
 fi
 
 case "${mode}" in
