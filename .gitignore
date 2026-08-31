@@ -92,6 +92,8 @@ android-build/
 # Large Files in Assets
 assets/blue_noise_mask_*/**
 resources/assets/blue_noise_mask_*/**
+!resources/assets/blue_noise_mask_512_12000/
+!resources/assets/blue_noise_mask_512_12000/*.tiff
 /resources/assets.tar.gz
 
 # Raw vendor SDK drops and diagnostics are local-only. The four curated Linux

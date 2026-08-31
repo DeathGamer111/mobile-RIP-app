@@ -105,13 +105,13 @@ Small runtime assets are tracked in `resources/assets/`, including:
 - Linearization XML presets for X-36 Studio 4/8-color output and the X-33 1440-DPI pipeline. The X-33 profile and linearization are seeded as that printer's defaults while valid user overrides remain intact.
 - `logo.png`
 
-Large blue-noise mask directories are intentionally ignored by Git:
+The production blue-noise mask TIFFs are tracked through Git LFS:
 
 ```text
-resources/assets/blue_noise_mask_*/**
+resources/assets/blue_noise_mask_512_12000/*.tiff
 ```
 
-For local builds that generate multi-ink output, the app expects `resources/assets/blue_noise_mask_512_12000/` to exist locally with the mask TIFF files used by `scripts/dev_build_linux.sh`. The masks can be embedded into Qt resources with `-DRIP_EMBED_BLUE_NOISE_MASKS=ON`. Desktop builds leave them as local runtime assets to avoid very large generated resource objects. Android builds embed them by default because a clean mobile installation has no separately provisioned runtime-assets directory; set `RIP_EMBED_BLUE_NOISE_MASKS=OFF` only for UI-only development APKs.
+Install Git LFS before cloning, or run `git lfs install` followed by `git lfs pull` in an existing checkout, so `resources/assets/blue_noise_mask_512_12000/` contains the TIFF data rather than pointer files. The masks can be embedded into Qt resources with `-DRIP_EMBED_BLUE_NOISE_MASKS=ON`. Desktop builds leave them as local runtime assets to avoid very large generated resource objects. Android builds embed them by default because a clean mobile installation has no separately provisioned runtime-assets directory; set `RIP_EMBED_BLUE_NOISE_MASKS=OFF` only for UI-only development APKs.
 
 Theme assets live under `resources/themes/<theme-id>/assets/` or `resources/vendor/<vendor-id>/assets/` and are compiled into Qt resources when referenced by theme JSON. Raw vendor drops, demo programs, and diagnostics stay ignored; the four reviewed Linux runtime libraries are centralized under `third_party/nocai/direct-print/`.
 
@@ -169,6 +169,7 @@ The July 2026 x86-64 SDK exports internal `API_*` C++ symbols instead of most do
 The development script installs/checks the main Linux dependencies:
 
 - CMake and a C++ compiler
+- Git LFS for the production blue-noise mask assets
 - Qt 6 Quick, Widgets, Quick Controls 2, QML tooling, and related QML modules
 - CUPS development libraries
 - ImageMagick 6 or 7 Magick++ (the scripts select the available development package)
@@ -397,7 +398,7 @@ The Android build defaults to `ANDROID_ABI=x86_64` for emulator testing on Linux
 
 - `build/` is ignored and should not be committed.
 - The generated Qt resource output under `.rcc/` is ignored.
-- The blue-noise mask source directory is ignored because the masks are large local runtime assets.
+- The production blue-noise mask TIFFs are tracked through Git LFS; other matching mask directories remain ignored.
 - Only the four curated Linux SDK runtime files belong under `third_party/nocai/direct-print`; full vendor drops and diagnostics remain ignored.
 - The tracked ICC and XML assets are required by the color-management and multi-ink paths.
 - `Dev_Build_App.sh` is a compatibility wrapper around `scripts/dev_build_linux.sh`.
