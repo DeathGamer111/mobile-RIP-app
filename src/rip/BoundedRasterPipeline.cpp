@@ -268,18 +268,23 @@ void configureImageMagickCache()
                   QStringLiteral("printflow-*.pfrs")}, QDir::Files))
             QFile::remove(stale.absoluteFilePath());
     });
+#if defined(Q_OS_ANDROID)
+    // Mobile devices cannot assume the desktop build host's relaxed 8 GiB / 12
+    // GiB ImageMagick policy. Keep Android's pixel cache bounded and let large
+    // images spill into the app-controlled cache directory above.
     Magick::ResourceLimits::memory(192ULL * MiB);
     Magick::ResourceLimits::map(128ULL * MiB);
     Magick::ResourceLimits::area(192ULL * MiB);
-    // Pixel caches above the memory/map budgets must use disk. The storage
-    // preflight remains the authoritative per-job limit. Reserving one sixth
-    // of available storage matches the preflight's 20% safety margin.
+
+    // The storage preflight remains the authoritative per-job limit. Reserving
+    // one sixth of available storage matches its 20% safety margin.
     const QStorageInfo storage(scratch);
     const quint64 available = storage.isValid() && storage.isReady()
         ? quint64(storage.bytesAvailable()) : 0;
     const quint64 diskBudget = available > 0
         ? (available / 6ULL) * 5ULL : 1024ULL * MiB;
     Magick::ResourceLimits::disk(diskBudget);
+#endif
 
     static std::once_flag logFlag;
     std::call_once(logFlag, [&]() {

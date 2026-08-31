@@ -896,7 +896,8 @@ Page {
                                 if (ok) {
                                     root.printHeight = result.heightMm;
                                     root.statusText = strings.trKey("printerMaintenance.status.printHeight")
-                                                      + result.heightMm + " mm";
+                                                      + Number(result.heightMm).toLocaleString(Qt.locale(), 'f', 2)
+                                                      + " mm";
                                 }
                             })
                     }

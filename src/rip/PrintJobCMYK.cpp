@@ -371,6 +371,24 @@ bool PrintJobCMYK::buildRasterSpool(
             return false;
         }
 
+        const auto strategy = BoundedRasterPipeline::selectRasterStrategy(
+            outputSize.width(), outputSize.height(), logicalChannelCount, false);
+        const auto mib = [](quint64 bytes) {
+            return (bytes + 1024ULL * 1024ULL - 1) / (1024ULL * 1024ULL);
+        };
+        const bool useInMemory =
+            strategy.strategy == BoundedRasterPipeline::RasterStrategy::InMemory;
+        qInfo().noquote()
+            << QStringLiteral(
+                   "PrintJobCMYK: raster backend path = %1; output %2 x %3; "
+                   "estimated in-memory use %4 MiB; limit %5 MiB.")
+                   .arg(useInMemory ? QStringLiteral("in-memory")
+                                    : QStringLiteral("bounded strips"))
+                   .arg(outputSize.width())
+                   .arg(outputSize.height())
+                   .arg(mib(strategy.estimatedNativeBytes))
+                   .arg(mib(strategy.nativeLimitBytes));
+
         if (outputSize.width() != static_cast<int>(inputImage.columns()) ||
             outputSize.height() != static_cast<int>(inputImage.rows())) {
             const int newWidth = outputSize.width();
@@ -389,16 +407,7 @@ bool PrintJobCMYK::buildRasterSpool(
         const int width = static_cast<int>(inputImage.columns());
         const int height = static_cast<int>(inputImage.rows());
 
-        const auto strategy = BoundedRasterPipeline::selectRasterStrategy(
-            width, height, logicalChannelCount, false);
-        const auto mib = [](quint64 bytes) {
-            return (bytes + 1024ULL * 1024ULL - 1) / (1024ULL * 1024ULL);
-        };
-        if (strategy.strategy == BoundedRasterPipeline::RasterStrategy::InMemory) {
-            qInfo().noquote()
-                << QStringLiteral("PrintJobCMYK: raster strategy = in-memory (estimated %1 MiB; limit %2 MiB).")
-                       .arg(mib(strategy.estimatedNativeBytes))
-                       .arg(mib(strategy.nativeLimitBytes));
+        if (useInMemory) {
             try {
                 if (buildInMemoryRasterSpool(xdpi, ydpi, spool))
                     return true;
@@ -411,11 +420,9 @@ bool PrintJobCMYK::buildRasterSpool(
             if (m_cancelRequested.load(std::memory_order_relaxed))
                 return false;
             spool = {};
+            qInfo().noquote()
+                << "PrintJobCMYK: raster backend path switched to bounded strips after the in-memory path did not complete.";
         }
-        qInfo().noquote()
-            << QStringLiteral("PrintJobCMYK: raster strategy = bounded strips (estimated in-memory use %1 MiB; limit %2 MiB).")
-                   .arg(mib(strategy.estimatedNativeBytes))
-                   .arg(mib(strategy.nativeLimitBytes));
 
         BoundedRasterPipeline::CanonicalCmykFile canonical;
         emit outputPhaseChanged(QStringLiteral("preprocessing"));

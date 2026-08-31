@@ -461,7 +461,7 @@ Item {
 			            name: jobNameField.text,
 			            imagePath: jobData.imagePath,
 			            paperSize: jobData.paperSize,
-			            mediaHeightMm: mediaHeightEnabled.checked ? mediaHeightSpin.value / 10.0 : -1,
+			            mediaHeightMm: mediaHeightEnabled.checked ? mediaHeightSpin.value / 100.0 : -1,
 			            resolution: (function() {
 			                let parts = resolutionComboBox.currentText.split("x")
 			                return (parts.length === 2)
@@ -760,7 +760,7 @@ Item {
                     id: mediaHeightEnabled
                     text: strings.trKey("jobDetails.mediaHeight.enable")
                     checked: jobData.mediaHeightMm !== undefined && jobData.mediaHeightMm >= 0
-                    onToggled: jobData.mediaHeightMm = checked ? mediaHeightSpin.value / 10.0 : -1
+                    onToggled: jobData.mediaHeightMm = checked ? mediaHeightSpin.value / 100.0 : -1
                 }
 
                 RowLayout {
@@ -772,21 +772,21 @@ Item {
                         id: mediaHeightSpin
                         Layout.fillWidth: true
                         from: 0
-                        to: 1520
+                        to: 15200
                         stepSize: 1
                         editable: true
                         value: jobData.mediaHeightMm !== undefined && jobData.mediaHeightMm >= 0
-                               ? Math.round(jobData.mediaHeightMm * 10) : 0
+                               ? Math.round(jobData.mediaHeightMm * 100) : 0
                         textFromValue: function(value, locale) {
-                            return Number(value / 10.0).toLocaleString(locale, 'f', 1)
+                            return Number(value / 100.0).toLocaleString(locale, 'f', 2)
                         }
                         valueFromText: function(text, locale) {
-                            return Math.round(Number.fromLocaleString(locale, text) * 10.0)
+                            return Math.round(Number.fromLocaleString(locale, text) * 100.0)
                         }
                         validator: DoubleValidator {
                             bottom: 0.0
                             top: 152.0
-                            decimals: 1
+                            decimals: 2
                             notation: DoubleValidator.StandardNotation
                         }
                         contentItem: TextInput {
@@ -803,7 +803,7 @@ Item {
                         }
                         onValueModified: {
                             if (mediaHeightEnabled.checked)
-                                jobData.mediaHeightMm = value / 10.0
+                                jobData.mediaHeightMm = value / 100.0
                         }
                     }
                 }

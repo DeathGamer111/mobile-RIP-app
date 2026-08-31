@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -48,8 +49,13 @@ bool processHasNetRawCapability()
     QFile status(QStringLiteral("/proc/self/status"));
     if (!status.open(QIODevice::ReadOnly | QIODevice::Text))
         return false;
-    while (!status.atEnd()) {
-        const QByteArray line = status.readLine().trimmed();
+
+    // procfs reports a size of zero for status files. QFile::atEnd() can
+    // therefore return true before the first read even though data is
+    // available, so consume the virtual file before inspecting its lines.
+    const QList<QByteArray> lines = status.readAll().split('\n');
+    for (const QByteArray& rawLine : lines) {
+        const QByteArray line = rawLine.trimmed();
         if (!line.startsWith("CapEff:"))
             continue;
         bool ok = false;
@@ -607,6 +613,69 @@ bool NocaiDirectPrintClient::abortPrint()
     return callSucceeded(m_abortPrint(), "AbortPrint");
 }
 
+bool NocaiDirectPrintClient::abortActivePrintAndWaitForController()
+{
+    if (!m_abortPrint || !m_closePrint) {
+        qWarning() << "NocaiDirectPrintClient: cannot abort the active print because"
+                      " the required SDK functions are unavailable.";
+        return false;
+    }
+
+    // AbortPrint only raises the vendor SDK's asynchronous cancellation flag.
+    // Closing the print session immediately afterward can race the SDK worker
+    // and cause ClosePrint to finalize all already-buffered raster data as a
+    // normal job. Wait for the controller/SDK to expose its cancelled or idle
+    // state before closing the data session.
+    const bool abortAccepted = m_abortPrint() == kSySucceeded;
+    if (!abortAccepted) {
+        qWarning() << "NocaiDirectPrintClient: AbortPrint was rejected by the SDK.";
+        m_closePrint();
+        return false;
+    }
+
+    qInfo() << "NocaiDirectPrintClient: AbortPrint accepted; waiting for controller cancellation.";
+    bool acknowledged = false;
+    if (m_getPrinterStatus) {
+        static constexpr int kStatusPollAttempts = 10;
+        static constexpr unsigned long kStatusPollIntervalMs = 1000;
+        for (int attempt = 0; attempt < kStatusPollAttempts; ++attempt) {
+            QThread::msleep(kStatusPollIntervalMs);
+            PrinterStatus status{};
+            const int result = m_getPrinterStatus(&status, sizeof(PrinterStatus));
+            if (result != kSySucceeded) {
+                qWarning() << "NocaiDirectPrintClient: GetPrinterStatus failed while waiting"
+                              " for cancellation; SDK result"
+                           << QStringLiteral("0x%1").arg(result, 0, 16) << ".";
+                continue;
+            }
+
+            qInfo() << "NocaiDirectPrintClient: cancellation status poll"
+                    << (attempt + 1) << "print status =" << status.PrintStatus;
+            // The vendor contract defines 4 as cancelled and 0 as standby.
+            if (status.PrintStatus == 4 || status.PrintStatus == 0) {
+                acknowledged = true;
+                break;
+            }
+        }
+    } else {
+        // Older SDK variants do not export GetPrinterStatus. They still need
+        // time for their internal print thread to consume the abort flag.
+        QThread::msleep(2000);
+    }
+
+    if (!acknowledged && m_getPrinterStatus) {
+        qWarning() << "NocaiDirectPrintClient: the controller did not report cancelled/idle"
+                      " before the cancellation timeout; closing only after the full grace period.";
+    } else if (acknowledged) {
+        qInfo() << "NocaiDirectPrintClient: controller acknowledged print cancellation.";
+    }
+
+    const bool closed = m_closePrint() == kSySucceeded;
+    if (!closed)
+        qWarning() << "NocaiDirectPrintClient: ClosePrint failed after cancellation.";
+    return abortAccepted && closed && (acknowledged || !m_getPrinterStatus);
+}
+
 void NocaiDirectPrintClient::cancelCurrentOutput()
 {
     m_cancelRequested.store(true, std::memory_order_relaxed);
@@ -831,11 +900,14 @@ bool NocaiDirectPrintClient::setPrintHeight(double heightMm)
     QMutexLocker locker(&m_mutex);
     if (!ensureLoaded() || !requireFunction(reinterpret_cast<const void*>(m_setPrintHeight), "SetPrintHeight"))
         return false;
-    // X-33 firmware represents print height as fixed-point hundredths of a mm
-    // in this WORD API (for example, 5.5 mm is sent as 550).
-    const uint16_t rawHundredthsMm = static_cast<uint16_t>(
-        std::clamp(qRound(heightMm * 100.0), 0, 15200));
-    return callSucceeded(m_setPrintHeight(rawHundredthsMm), "SetPrintHeight");
+    uint16_t sdkHeightMm = 0;
+    if (!encodePrintHeightMm(heightMm, &sdkHeightMm))
+        return false;
+    qInfo().noquote()
+        << QStringLiteral("NocaiDirectPrintClient: setting print height %1 mm (SDK raw %2 hundredths mm).")
+               .arg(heightMm, 0, 'f', 2)
+               .arg(sdkHeightMm);
+    return callSucceeded(m_setPrintHeight(sdkHeightMm), "SetPrintHeight");
 }
 
 QVariantMap NocaiDirectPrintClient::getPrintHeight()
@@ -848,7 +920,29 @@ QVariantMap NocaiDirectPrintClient::getPrintHeight()
         callSucceeded(m_getPrintHeight(&height), "GetPrintHeight");
     out["ok"] = ok;
     out["heightMm"] = static_cast<double>(height) / 100.0;
+    if (ok) {
+        qInfo().noquote()
+            << QStringLiteral("NocaiDirectPrintClient: read print height %1 mm (SDK raw %2 hundredths mm).")
+                   .arg(static_cast<double>(height) / 100.0, 0, 'f', 2)
+                   .arg(height);
+    }
     return out;
+}
+
+bool NocaiDirectPrintClient::encodePrintHeightMm(
+    double heightMm, uint16_t* sdkHeightMm)
+{
+    if (!sdkHeightMm || !std::isfinite(heightMm) || heightMm < 0.0 ||
+        heightMm > 152.0) {
+        setError(QStringLiteral("Print height must be between 0 and 152 millimeters."));
+        return false;
+    }
+
+    // The controller transports Z height as an integer count of hundredths of
+    // a millimeter. The application presents the physical machine value, so
+    // 0.05 mm is encoded as SDK value 5 and decoded symmetrically.
+    *sdkHeightMm = static_cast<uint16_t>(std::round(heightMm * 100.0));
+    return true;
 }
 
 QVariantMap NocaiDirectPrintClient::getJobSettings()
@@ -1900,15 +1994,27 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                 !requireFunction(reinterpret_cast<const void*>(m_getPrintHeight),
                                  "GetPrintHeight"))
                 return false;
-            const uint16_t rawHundredthsMm = static_cast<uint16_t>(
-                std::clamp(qRound(settings.mediaHeightMm * 100.0), 0, 15200));
+            uint16_t sdkHeightMm = 0;
+            if (!encodePrintHeightMm(settings.mediaHeightMm, &sdkHeightMm))
+                return false;
+            qInfo().noquote()
+                << QStringLiteral("NocaiDirectPrintClient: per-job media height request %1 mm (SDK raw %2 hundredths mm).")
+                       .arg(settings.mediaHeightMm, 0, 'f', 2)
+                       .arg(sdkHeightMm);
 
             uint16_t currentHeight = 0;
-            bool heightReached = m_getPrintHeight(&currentHeight) == kSySucceeded
-                && currentHeight == rawHundredthsMm;
+            const int initialHeightResult = m_getPrintHeight(&currentHeight);
+            qInfo().noquote()
+                << QStringLiteral("NocaiDirectPrintClient: initial GetPrintHeight result 0x%1; raw %2 (%3 mm).")
+                       .arg(initialHeightResult, 0, 16)
+                       .arg(currentHeight)
+                       .arg(static_cast<double>(currentHeight) / 100.0, 0, 'f', 2);
+            bool heightReached = initialHeightResult == kSySucceeded
+                && currentHeight == sdkHeightMm;
             if (!heightReached) {
-                if (!callSucceeded(m_setPrintHeight(rawHundredthsMm), "SetPrintHeight"))
+                if (!callSucceeded(m_setPrintHeight(sdkHeightMm), "SetPrintHeight"))
                     return false;
+                qInfo() << "NocaiDirectPrintClient: SetPrintHeight accepted; waiting for Z movement to complete.";
 
                 // SetPrintHeight starts an asynchronous Z-axis move. Starting
                 // the job while that move is active makes StartPrint fail and
@@ -1917,18 +2023,20 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                     QThread::msleep(250);
                     currentHeight = 0;
                     heightReached = m_getPrintHeight(&currentHeight) == kSySucceeded
-                        && currentHeight == rawHundredthsMm;
+                        && currentHeight == sdkHeightMm;
                 }
                 if (!heightReached) {
                     setError(QStringLiteral(
                         "Timed out waiting for print height %1 mm; controller reported %2 mm.")
-                                 .arg(settings.mediaHeightMm, 0, 'f', 1)
+                                 .arg(settings.mediaHeightMm, 0, 'f', 2)
                                  .arg(static_cast<double>(currentHeight) / 100.0, 0, 'f', 2));
                     return false;
                 }
             }
-            qDebug() << "NocaiDirectPrintClient: per-job media height ready at"
-                     << settings.mediaHeightMm << "mm.";
+            qInfo().noquote()
+                << QStringLiteral("NocaiDirectPrintClient: per-job media height ready at %1 mm (SDK raw %2).")
+                       .arg(settings.mediaHeightMm, 0, 'f', 2)
+                       .arg(currentHeight);
         }
 
 #if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID) && defined(__aarch64__)
@@ -2083,8 +2191,7 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                 if ((m_cancelRequested.load(std::memory_order_relaxed) ||
                      (!m_workerCancelFilePath.isEmpty() &&
                       QFileInfo::exists(m_workerCancelFilePath)))) {
-                    m_abortPrint();
-                    m_closePrint();
+                    abortActivePrintAndWaitForController();
                     setError("Direct print was canceled.");
                     return false;
                 }
@@ -2093,8 +2200,7 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                 const int ch = raster.channelOrder[plane];
                 if (ch < 0 || ch >= static_cast<int>(raster.packedLines->size())) {
                     setError("Direct print raster channel/row index is invalid.");
-                    m_abortPrint();
-                    m_closePrint();
+                    abortActivePrintAndWaitForController();
                     return false;
                 }
                 QByteArray spoolLine;
@@ -2104,8 +2210,7 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                     QString readError;
                     if (!m_activeSpoolReader->readLine(ch, row, &spoolLine, &readError)) {
                         setError(readError);
-                        m_abortPrint();
-                        m_closePrint();
+                        abortActivePrintAndWaitForController();
                         return false;
                     }
                     lineData = reinterpret_cast<const uint8_t*>(spoolLine.constData());
@@ -2113,8 +2218,7 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                 } else {
                     if (row < 0 || row >= static_cast<int>((*raster.packedLines)[ch].size())) {
                         setError("Direct print raster channel/row index is invalid.");
-                        m_abortPrint();
-                        m_closePrint();
+                        abortActivePrintAndWaitForController();
                         return false;
                     }
                     const std::vector<uint8_t>& line = (*raster.packedLines)[ch][row];
@@ -2126,8 +2230,7 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                         "Direct print plane-line size mismatch: got %1, expected %2.")
                                  .arg(lineSize)
                                  .arg(prop.BytesPerLine));
-                    m_abortPrint();
-                    m_closePrint();
+                    abortActivePrintAndWaitForController();
                     return false;
                 }
 
@@ -2153,8 +2256,7 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
                                      .arg(bytesWritten)
                                      .arg(prop.BytesPerLine));
                     }
-                    m_abortPrint();
-                    m_closePrint();
+                    abortActivePrintAndWaitForController();
                     return false;
                 }
                 if (m_spoolProgressCallback) {
@@ -2178,8 +2280,7 @@ bool NocaiDirectPrintClient::printPackedJob(const DirectPrintRaster& raster,
         // part of committing the transmitted job; physical printing continues
         // asynchronously after this API session has been closed.
         if (!callSucceeded(m_endPrint(), "EndPrint")) {
-            m_abortPrint();
-            m_closePrint();
+            abortActivePrintAndWaitForController();
             return false;
         }
 

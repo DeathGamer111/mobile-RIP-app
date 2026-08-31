@@ -173,6 +173,8 @@ private:
     void setError(const QString& message);
     bool callSucceeded(int result, const QString& functionName);
     bool requireFunction(const void* fn, const QString& functionName);
+    bool encodePrintHeightMm(double heightMm, uint16_t* sdkHeightMm);
+    bool abortActivePrintAndWaitForController();
     bool withSdkWorkingDirectory(const std::function<bool()>& callback);
     JobSettings makeJobSettings(const DirectPrintSettings& settings) const;
     QVariantMap jobSettingsToMap(const JobSettings& settings) const;

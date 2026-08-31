@@ -6,7 +6,10 @@
 #include <QtTest/QtTest>
 #include <QDir>
 #include <QFileInfo>
+#include <QLibrary>
+#include <QScopeGuard>
 #include <QTemporaryDir>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include <cstdint>
 #include <cstring>
@@ -25,6 +28,7 @@ private slots:
     void directPrintUnavailablePathFailsCleanly();
     void missingSdkEnvironmentIsNotRequired();
     void mangledCompatibilitySymbolsAreSupported();
+    void cancellationWaitsForControllerAcknowledgement();
     void configuredVendorSdkLoadsWhenPresent();
     void armCommandTagCompatibilityCorrectsWireCopy();
     void armRealSdkConnectionProbe();
@@ -85,6 +89,11 @@ void VendorIsolationTest::mangledCompatibilitySymbolsAreSupported()
     // The client must mirror the vendor demo's Search -> Select -> Connect order.
     QVERIFY2(client.connectPrinter(), qPrintable(client.lastError()));
     QVERIFY(client.isConnected());
+    QVERIFY2(client.setPrintHeight(0.05), qPrintable(client.lastError()));
+    const QVariantMap printHeight = client.getPrintHeight();
+    QVERIFY2(printHeight.value(QStringLiteral("ok")).toBool(),
+             qPrintable(client.lastError()));
+    QCOMPARE(printHeight.value(QStringLiteral("heightMm")).toDouble(), 0.05);
     // Model an origin left behind by an interrupted older client. Nozzle
     // checks must always reconcile that persistent controller state to 0,0.
     QVERIFY2(client.setPrintXYValue(12, 34), qPrintable(client.lastError()));
@@ -120,7 +129,7 @@ void VendorIsolationTest::mangledCompatibilitySymbolsAreSupported()
     settings.eclosionGrade = 2;
     // CPrinter_Model_X33's generic two-head configuration maps to selection 0.
     settings.headSelect = 0;
-    settings.mediaHeightMm = 5.5;
+    settings.mediaHeightMm = 0.05;
     settings.printOffsetXmm = 12;
     settings.printOffsetYmm = 34;
     // The X-33 canonical header must win over any independently persisted
@@ -206,6 +215,78 @@ void VendorIsolationTest::configuredVendorSdkLoadsWhenPresent()
 #endif
 #else
     QSKIP("No architecture-compatible vendor SDK was configured.");
+#endif
+}
+
+void VendorIsolationTest::cancellationWaitsForControllerAcknowledgement()
+{
+#if !defined(__linux__) || !defined(__x86_64__)
+    QSKIP("The vendor cancellation compatibility test is Linux x86-64 only.");
+#else
+    const QFileInfo fakeSdk(QStringLiteral(PRINTFLOW_FAKE_MANGLED_SDK_PATH));
+    QVERIFY2(fakeSdk.exists(), qPrintable(fakeSdk.absoluteFilePath()));
+
+    QLibrary diagnostics(fakeSdk.absoluteFilePath());
+    QVERIFY2(diagnostics.load(), qPrintable(diagnostics.errorString()));
+    using DiagnosticFn = int (*)();
+    const auto receivedLineCount = reinterpret_cast<DiagnosticFn>(
+        diagnostics.resolve("FakeSdkReceivedLineCount"));
+    const auto physicalCancelCommitted = reinterpret_cast<DiagnosticFn>(
+        diagnostics.resolve("FakeSdkPhysicalCancelCommitted"));
+    QVERIFY(receivedLineCount);
+    QVERIFY(physicalCancelCommitted);
+
+    NocaiDirectPrintClient client;
+    client.setSdkRootPath(fakeSdk.absolutePath());
+    QVERIFY2(client.isAvailable(), qPrintable(client.lastError()));
+    QVERIFY2(client.refreshPrinters(), qPrintable(client.lastError()));
+    QVERIFY2(client.connectPrinter(), qPrintable(client.lastError()));
+
+    static constexpr int kHeight = 500;
+    std::vector<std::vector<std::vector<uint8_t>>> packedLines(4);
+    for (int channel = 0; channel < 4; ++channel) {
+        packedLines[size_t(channel)].resize(kHeight);
+        for (auto& line : packedLines[size_t(channel)])
+            line.assign(4, static_cast<uint8_t>(channel + 1));
+    }
+    DirectPrintRaster raster;
+    raster.packedLines = &packedLines;
+    raster.channelOrder = {2, 1, 0, 3};
+    raster.width = 16;
+    raster.height = kHeight;
+    raster.xdpi = 720;
+    raster.ydpi = 720;
+    raster.bytesPerLine = 4;
+    raster.format = DirectPrintRasterFormat::NocaiX33Standard;
+    raster.canonicalHeader = NocaiPrnWriter::makeStandardCmykHeader(
+        raster.width, raster.height, raster.xdpi, raster.ydpi,
+        raster.bytesPerLine);
+
+    DirectPrintSettings settings;
+    settings.printerIndex = 0;
+    settings.printDirection = 1;
+    settings.eclosionGrade = 2;
+    settings.headSelect = 0;
+    settings.mediaHeightMm = 0.05;
+    settings.printOffsetXmm = 12;
+    settings.printOffsetYmm = 34;
+
+    qputenv("PRINTFLOW_FAKE_SDK_LINE_DELAY_MS", "2");
+    const auto environmentGuard = qScopeGuard([]() {
+        qunsetenv("PRINTFLOW_FAKE_SDK_LINE_DELAY_MS");
+    });
+    QFuture<bool> result = QtConcurrent::run([&client, &raster, &settings]() {
+        return client.submitPreparedJob(raster, settings);
+    });
+    QTRY_VERIFY_WITH_TIMEOUT(receivedLineCount() > 0, 5000);
+    client.cancelCurrentOutput();
+    QTRY_VERIFY_WITH_TIMEOUT(result.isFinished(), 10000);
+
+    QVERIFY(!result.result());
+    QVERIFY(client.lastError().contains(QStringLiteral("canceled"),
+                                        Qt::CaseInsensitive));
+    QCOMPARE(physicalCancelCommitted(), 1);
+    QVERIFY(receivedLineCount() < kHeight * 4);
 #endif
 }
 

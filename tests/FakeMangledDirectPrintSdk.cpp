@@ -1,6 +1,10 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <thread>
 
 struct PrinterInfoList
 {
@@ -58,7 +62,7 @@ static bool selectedPrinter = false;
 static bool connectedPrinter = false;
 static unsigned int expectedLineSize = 0;
 static unsigned int expectedLineCount = 0;
-static unsigned int receivedLineCount = 0;
+static std::atomic_uint receivedLineCount{0};
 static uint16_t configuredHeadSelect = 0;
 static uint16_t configuredPrintDirection = 0;
 static uint16_t configuredEclosionGrade = 0;
@@ -73,6 +77,9 @@ static bool originSetAfterInit = false;
 static unsigned int statusPollCount = 0;
 static bool endPrintSignaled = false;
 static unsigned int activeColors = 0;
+static std::atomic_bool abortRequested{false};
+static std::atomic_bool abortAcknowledged{false};
+static std::atomic_bool physicalCancelCommitted{false};
 
 extern "C" int StartPrint(tagPrintJobProperty*);
 extern "C" int WriteRipData(char*, unsigned int);
@@ -116,7 +123,7 @@ int API_StartPrint(tagPrintJobProperty* property)
                 || (property->Colors == 4 && configuredPrintDirection == 1
                     && configuredEclosionGrade == 2
                     && configuredHeadSelect == 0
-                    && configuredPrintHeight == 550
+                    && configuredPrintHeight == 5
                     && printerInitialized
                     && originSetAfterInit
                     && configuredPrintX == 1200
@@ -127,7 +134,7 @@ int API_StartPrint(tagPrintJobProperty* property)
                     && configuredWcSequence == 1
                     && configuredWhiteInkPercent == 3
                     && configuredWhiteInkPassCount == 2
-                    && configuredPrintHeight == 550
+                    && configuredPrintHeight == 5
                     && printerInitialized
                     && originSetAfterInit
                     && configuredPrintX == 1200
@@ -137,10 +144,13 @@ int API_StartPrint(tagPrintJobProperty* property)
 
     expectedLineSize = property->BytesPerLine;
     expectedLineCount = property->Height * property->Colors;
-    receivedLineCount = 0;
+    receivedLineCount.store(0);
     activeColors = property->Colors;
     statusPollCount = 0;
     endPrintSignaled = false;
+    abortRequested.store(false);
+    abortAcknowledged.store(false);
+    physicalCancelCommitted.store(false);
     return 1;
 }
 int API_PrintALine(char* data, unsigned int size)
@@ -150,22 +160,44 @@ int API_PrintALine(char* data, unsigned int size)
 
     if (activeColors == 4 || activeColors == 6) {
         static constexpr unsigned char expectedYmckww[] = {3, 2, 1, 4, 5, 5};
-        const unsigned int plane = receivedLineCount % activeColors;
+        const unsigned int plane = receivedLineCount.load() % activeColors;
         if (static_cast<unsigned char>(data[0]) != expectedYmckww[plane])
             return 0;
     }
 
-    ++receivedLineCount;
+    if (const char* delayValue = std::getenv("PRINTFLOW_FAKE_SDK_LINE_DELAY_MS")) {
+        const int delayMs = std::atoi(delayValue);
+        if (delayMs > 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+    }
+    receivedLineCount.fetch_add(1);
     return static_cast<int>(size);
 }
-int API_AbortPrint() { return 1; }
+int API_AbortPrint() { abortRequested.store(true); return 1; }
 int API_PausePrint() { return 1; }
 int API_EndPrint()
 {
-    endPrintSignaled = receivedLineCount == expectedLineCount;
+    endPrintSignaled = receivedLineCount.load() == expectedLineCount;
     return endPrintSignaled ? 1 : 0;
 }
-int API_ClosePrint() { return endPrintSignaled ? 1 : 0; }
+int API_ClosePrint()
+{
+    if (abortRequested.load()) {
+        physicalCancelCommitted.store(abortAcknowledged.load());
+        return abortAcknowledged.load() ? 1 : 0;
+    }
+    return endPrintSignaled ? 1 : 0;
+}
+
+extern "C" int FakeSdkReceivedLineCount()
+{
+    return static_cast<int>(receivedLineCount.load());
+}
+
+extern "C" int FakeSdkPhysicalCancelCommitted()
+{
+    return physicalCancelCommitted.load() ? 1 : 0;
+}
 int API_SetJobSettings(stJobSettings* settings, int size)
 {
     if (!settings || size != static_cast<int>(sizeof(stJobSettings)))
@@ -221,7 +253,12 @@ int API_GetPrinterStatus(stPrinterStatus* status, int size)
     if (!status || size != static_cast<int>(sizeof(stPrinterStatus)))
         return 0;
     status->CleanStatus = 0;
-    status->PrintStatus = !endPrintSignaled ? 5 : (statusPollCount++ == 0 ? 1 : 0);
+    if (abortRequested.load()) {
+        status->PrintStatus = 4;
+        abortAcknowledged.store(true);
+    } else {
+        status->PrintStatus = !endPrintSignaled ? 5 : (statusPollCount++ == 0 ? 1 : 0);
+    }
     return 1;
 }
 
